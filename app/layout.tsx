@@ -10,23 +10,15 @@ export const revalidate = 0
 export const metadata: Metadata = {
   title: 'Handwriting Worksheet Generator',
   description: 'Create customized handwriting practice worksheets for primary school students',
-  generator: 'v0.app',
+  applicationName: 'HandWriting',
+  manifest: '/site.webmanifest',
   icons: {
     icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon-96x96.png', sizes: '96x96', type: 'image/png' },
     ],
-    apple: '/apple-icon.png',
+    apple: '/apple-touch-icon.png',
   },
 }
 

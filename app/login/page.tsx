@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Loader2, LogIn } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import { AppLogo } from '@/components/AppLogo';
 
 function formatAuthError(message: string): string {
   const lower = message.toLowerCase();
@@ -111,8 +112,16 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-[radial-gradient(circle_at_top,_#ffffff_0%,_#f3f2f1_55%,_#ebe9e8_100%)] px-4 py-10">
       <div className="w-full max-w-md rounded-3xl border border-white/70 bg-white/95 p-8 shadow-[0_20px_60px_rgba(0,0,0,0.08)] backdrop-blur">
         <div className="mb-6">
-          <p className="text-sm font-semibold tracking-[0.18em] text-[#185abd] uppercase">HandWriting</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-[#201f1e]">Welcome</h1>
+          <div className="mb-4 flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-[#e1dfdd] bg-white p-1.5 shadow-sm">
+              <AppLogo size={40} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold tracking-[0.18em] text-[#185abd] uppercase">HandWriting</p>
+              <p className="text-xs text-[#605e5c]">Worksheet Generator</p>
+            </div>
+          </div>
+          <h1 className="text-3xl font-semibold tracking-tight text-[#201f1e]">Welcome</h1>
           <p className="mt-2 text-sm leading-6 text-[#605e5c]">
             Sign in to access your workspace.
           </p>

@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { AlertCircle, CheckCircle, Copy, Download, FilePlus, FileText, FolderOpen, Loader2, LogOut, Printer, Save } from 'lucide-react';
+import { AlertCircle, CheckCircle, Copy, Download, FilePlus, FolderOpen, Loader2, LogOut, Printer, Save } from 'lucide-react';
+import { AppLogo } from '@/components/AppLogo';
 import { useRouter } from 'next/navigation';
 import { DocumentRibbon } from '@/components/word/DocumentRibbon';
 import { DocumentWorkspace } from '@/components/word/DocumentWorkspace';
@@ -902,8 +903,8 @@ export const EditorInterface: React.FC = () => {
       <header className="word-titlebar flex h-11 shrink-0 items-center justify-between px-3">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 pr-3">
-            <div className="flex h-7 w-7 items-center justify-center rounded bg-white/20">
-              <FileText size={15} className="text-white" />
+            <div className="flex h-7 w-7 items-center justify-center overflow-hidden rounded bg-white/20 p-0.5">
+              <AppLogo size={24} />
             </div>
             <div className="flex flex-col leading-none">
               <span className="text-[13px] font-semibold text-white">Handwriting</span>
