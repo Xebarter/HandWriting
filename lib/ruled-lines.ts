@@ -1,0 +1,197 @@
+import { PAGE_HEIGHT } from './document-constants';
+import { RuledFontMetrics } from './font-metrics';
+import { pageContentArea, PageContentArea } from './page-margins';
+import { PlacedLine, WorksheetTextLayout } from './text-line-layout';
+
+/** Strong ruled lines (cap line + baseline) */
+export const RULED_LINE_STRONG_COLOR = '#9bb8e8';
+/** Middle line uses the same hue at low opacity so it stays faint in print */
+export const RULED_LINE_MID_COLOR = '#9bb8e8';
+export const RULED_LINE_MID_OPACITY = 0.32;
+export const RULED_LINE_STRONG_WIDTH = 1;
+export const RULED_LINE_MID_WIDTH = 0.75;
+
+export interface RuledRowGuide {
+  topY: number;
+  /** x-height line — between cap line and baseline, not the geometric center */
+  midY: number;
+  baselineY: number;
+}
+
+/** Three ruled guides for one text row from measured font metrics. */
+export function ruledRowGuide(
+  baselineY: number,
+  capAscent: number,
+  xAscent: number
+): RuledRowGuide {
+  return {
+    topY: baselineY - capAscent,
+    midY: baselineY - xAscent,
+    baselineY,
+  };
+}
+
+function strokeHorizontalInArea(
+  ctx: CanvasRenderingContext2D,
+  y: number,
+  area: PageContentArea,
+  color: string,
+  lineWidth: number,
+  opacity = 1
+) {
+  if (y < area.top || y > area.bottom) return;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = opacity;
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(area.left, y);
+  ctx.lineTo(area.right, y);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Draw one ruled trio: top + baseline strong, middle faint — clipped to the margin box. */
+export function drawRuledRowLines(
+  ctx: CanvasRenderingContext2D,
+  guide: RuledRowGuide,
+  area: PageContentArea
+) {
+  strokeHorizontalInArea(
+    ctx,
+    guide.topY,
+    area,
+    RULED_LINE_STRONG_COLOR,
+    RULED_LINE_STRONG_WIDTH
+  );
+
+  strokeHorizontalInArea(
+    ctx,
+    guide.midY,
+    area,
+    RULED_LINE_MID_COLOR,
+    RULED_LINE_MID_WIDTH,
+    RULED_LINE_MID_OPACITY
+  );
+
+  strokeHorizontalInArea(
+    ctx,
+    guide.baselineY,
+    area,
+    RULED_LINE_STRONG_COLOR,
+    RULED_LINE_STRONG_WIDTH
+  );
+}
+
+/** Short local guides beside a single letter (guide-lines / arrow-guides modes). */
+export function drawLetterGuideLines(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  guide: RuledRowGuide,
+  span: number
+) {
+  const lines: Array<{ y: number; faint: boolean }> = [
+    { y: guide.topY, faint: false },
+    { y: guide.midY, faint: true },
+    { y: guide.baselineY, faint: false },
+  ];
+
+  for (const line of lines) {
+    ctx.save();
+    ctx.strokeStyle = line.faint ? RULED_LINE_MID_COLOR : RULED_LINE_STRONG_COLOR;
+    ctx.globalAlpha = line.faint ? RULED_LINE_MID_OPACITY : 1;
+    ctx.lineWidth = line.faint ? RULED_LINE_MID_WIDTH : RULED_LINE_STRONG_WIDTH;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, line.y);
+    ctx.lineTo(x + span, line.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+export interface LineRowMetrics {
+  capAscent: number;
+  xAscent: number;
+  lineHeight: number;
+}
+
+/** Per-row cap / x-height metrics from the tallest character on that line. */
+export function lineRowMetrics(
+  layout: WorksheetTextLayout,
+  line: PlacedLine
+): LineRowMetrics {
+  const lineChars = layout.chars.filter((char) => char.lineIndex === line.lineIndex);
+  let capAscent = layout.metrics.capAscent;
+  let xAscent = layout.metrics.xAscent;
+  let lineHeight = layout.lineHeight;
+
+  for (const char of lineChars) {
+    capAscent = Math.max(capAscent, char.capAscent);
+    xAscent = Math.max(xAscent, char.xAscent);
+    lineHeight = Math.max(lineHeight, char.fontSize);
+  }
+
+  return { capAscent, xAscent, lineHeight };
+}
+
+/**
+ * Draw ruled rows aligned to laid-out text. Each row's middle line sits at
+ * x-height (dynamic per line); top and baseline stay strong, middle stays faint.
+ */
+export function drawRuledLinesFromLayout(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  layout: WorksheetTextLayout,
+  fallbackMetrics: RuledFontMetrics
+) {
+  const pageCount = Math.max(1, Math.ceil(height / PAGE_HEIGHT));
+  const margin = layout.margin;
+  const fallbackCap = fallbackMetrics.capAscent;
+  const fallbackX = fallbackMetrics.xAscent;
+  const fallbackRowHeight = fallbackMetrics.ruledHeight;
+  const fallbackLineHeight = fallbackMetrics.lineHeight;
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const pageTop = pageIndex * PAGE_HEIGHT;
+    const pageBottom = Math.min(height, pageTop + PAGE_HEIGHT);
+    const area = pageContentArea(pageTop, pageBottom, width, margin);
+    const linesOnPage = layout.lines
+      .filter((line) => line.pageIndex === pageIndex)
+      .sort((a, b) => a.baselineY - b.baselineY);
+
+    for (const line of linesOnPage) {
+      const row = lineRowMetrics(layout, line);
+      const guide = ruledRowGuide(line.baselineY, row.capAscent, row.xAscent);
+      if (guide.topY > area.bottom) continue;
+      drawRuledRowLines(ctx, guide, area);
+    }
+
+    if (linesOnPage.length === 0) {
+      for (
+        let baselineY = area.top + fallbackRowHeight;
+        baselineY <= area.bottom;
+        baselineY += fallbackLineHeight
+      ) {
+        const guide = ruledRowGuide(baselineY, fallbackCap, fallbackX);
+        if (guide.topY < area.top) continue;
+        drawRuledRowLines(ctx, guide, area);
+      }
+      continue;
+    }
+
+    const lastLine = linesOnPage[linesOnPage.length - 1];
+    const lastRow = lineRowMetrics(layout, lastLine);
+    for (
+      let baselineY = lastLine.baselineY + lastRow.lineHeight;
+      baselineY <= area.bottom;
+      baselineY += fallbackLineHeight
+    ) {
+      const guide = ruledRowGuide(baselineY, fallbackCap, fallbackX);
+      if (guide.topY < area.top) continue;
+      drawRuledRowLines(ctx, guide, area);
+    }
+  }
+}
