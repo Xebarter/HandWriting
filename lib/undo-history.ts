@@ -1,14 +1,31 @@
 import { TextRange } from '@/lib/editor-input';
+import { LetterConnection, TextStyleRange } from '@/lib/types';
 
 export interface HistoryEntry {
   text: string;
   selection: TextRange;
+  connections: LetterConnection[];
+  autoLinkEnabled: boolean;
+  textStyleRanges: TextStyleRange[];
 }
 
 export type EditKind = 'typing' | 'delete' | 'paragraph' | 'paste' | 'other';
 
 const MAX_DEPTH = 100;
 const COALESCE_WINDOW_MS = 1000;
+
+export function cloneHistoryEntry(entry: HistoryEntry): HistoryEntry {
+  return {
+    text: entry.text,
+    selection: { ...entry.selection },
+    connections: entry.connections.map((connection) => ({
+      ...connection,
+      points: connection.points.map((point) => ({ ...point })),
+    })),
+    autoLinkEnabled: entry.autoLinkEnabled,
+    textStyleRanges: entry.textStyleRanges.map((range) => ({ ...range })),
+  };
+}
 
 /**
  * Undo/redo stack with typing coalescing: consecutive character insertions
@@ -29,7 +46,7 @@ export class UndoHistory {
       now - this.lastTime < COALESCE_WINDOW_MS;
 
     if (!coalesce) {
-      this.undoStack.push(previous);
+      this.undoStack.push(cloneHistoryEntry(previous));
       if (this.undoStack.length > MAX_DEPTH) {
         this.undoStack.shift();
       }
@@ -48,7 +65,7 @@ export class UndoHistory {
   undo(current: HistoryEntry): HistoryEntry | null {
     const entry = this.undoStack.pop();
     if (!entry) return null;
-    this.redoStack.push(current);
+    this.redoStack.push(cloneHistoryEntry(current));
     this.lastKind = null;
     return entry;
   }
@@ -56,7 +73,7 @@ export class UndoHistory {
   redo(current: HistoryEntry): HistoryEntry | null {
     const entry = this.redoStack.pop();
     if (!entry) return null;
-    this.undoStack.push(current);
+    this.undoStack.push(cloneHistoryEntry(current));
     this.lastKind = null;
     return entry;
   }

@@ -230,4 +230,38 @@ export function hasConnection(
   );
 }
 
+export function connectionFullyInRange(
+  connection: LetterConnection,
+  start: number,
+  end: number
+): boolean {
+  return (
+    connection.fromCharIndex >= start &&
+    connection.fromCharIndex < end &&
+    connection.toCharIndex >= start &&
+    connection.toCharIndex < end
+  );
+}
+
+export function removeConnectionsInRange(
+  connections: LetterConnection[],
+  start: number,
+  end: number
+): LetterConnection[] {
+  return connections.filter((connection) => !connectionFullyInRange(connection, start, end));
+}
+
+export function mergeConnections(
+  existing: LetterConnection[],
+  added: LetterConnection[]
+): LetterConnection[] {
+  const merged = [...existing];
+  for (const connection of added) {
+    if (!hasConnection(merged, connection.fromCharIndex, connection.toCharIndex)) {
+      merged.push(connection);
+    }
+  }
+  return merged;
+}
+
 export { sampleTraceDots };

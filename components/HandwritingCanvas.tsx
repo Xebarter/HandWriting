@@ -49,6 +49,7 @@ interface HandwritingCanvasProps {
   connections?: LetterConnection[];
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
+  getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
   /** When set, only render this page slice (print-layout view). Full document height is still used internally. */
   clipPageIndex?: number;
 }
@@ -87,6 +88,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
       connections = [],
       getCharMode,
       getCharFontSize,
+      getCharAlign,
       clipPageIndex,
     },
     ref
@@ -246,6 +248,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
               fontMetrics: resolvedMetrics,
               getCharMode,
               getCharFontSize,
+              getCharAlign,
             })
           : null;
 
@@ -289,6 +292,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
           fontMetrics,
           getCharMode,
           getCharFontSize,
+          getCharAlign,
         });
       }
     }
@@ -339,6 +343,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     connections,
     getCharMode,
     getCharFontSize,
+    getCharAlign,
     clipPageIndex,
     displayHeight,
   ]);

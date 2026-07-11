@@ -17,6 +17,7 @@ export interface WorksheetTextOptions {
   fontMetrics?: RuledFontMetrics;
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
+  getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
 }
 
 export interface PlacedChar {
@@ -67,7 +68,6 @@ function wrapParagraph(
   getCharFontSize: (charIndex: number) => number,
   metricsCache: Map<number, RuledFontMetrics>
 ): string[] {
-  const words = paragraph.split(' ');
   const lines: string[] = [];
   let currentLine = '';
   let lineStartOffset = paragraphStart;
@@ -83,25 +83,23 @@ function wrapParagraph(
     return width;
   };
 
-  for (let wordIndex = 0; wordIndex < words.length; wordIndex += 1) {
-    let wordStart = paragraphStart;
-    for (let index = 0; index < wordIndex; index += 1) {
-      wordStart += words[index].length + 1;
-    }
-
-    const word = words[wordIndex];
-    const candidate = currentLine ? `${currentLine} ${word}` : word;
-    const measureStart = currentLine ? lineStartOffset : wordStart;
+  for (let index = 0; index < paragraph.length; index += 1) {
+    const char = paragraph[index];
+    const candidate = currentLine + char;
+    const measureStart = currentLine ? lineStartOffset : paragraphStart + index;
     const candidateWidth = measureSegment(candidate, measureStart);
 
     if (candidateWidth <= availableWidth || currentLine === '') {
-      if (!currentLine) lineStartOffset = wordStart;
+      if (!currentLine) {
+        lineStartOffset = paragraphStart + index;
+      }
       currentLine = candidate;
-    } else {
-      lines.push(currentLine);
-      currentLine = word;
-      lineStartOffset = wordStart;
+      continue;
     }
+
+    lines.push(currentLine);
+    currentLine = char;
+    lineStartOffset = paragraphStart + index;
   }
 
   if (currentLine) {
@@ -139,6 +137,39 @@ function alignedLineX(
   return startX;
 }
 
+/**
+ * Place a line baseline so its ruled cap line does not cross above the previous
+ * line's baseline. Large letters on the current row need this clearance.
+ */
+function resolveLineBaseline(
+  cursorY: number,
+  lineCapAscent: number,
+  startPageIndex: number,
+  margin: number,
+  ruledHeight: number,
+  previousBaseline: number | null
+): { baselineY: number; pageIndex: number } {
+  const pageTop = (page: number) => page * PAGE_HEIGHT;
+  const maxBaselineForPage = (page: number) => pageTop(page) + PAGE_HEIGHT - margin;
+  const firstBaselineForPage = (page: number) => pageTop(page) + margin + ruledHeight;
+
+  let page = startPageIndex;
+  let minY = pageTop(page) + margin + lineCapAscent;
+  if (previousBaseline !== null && previousBaseline >= pageTop(page)) {
+    minY = Math.max(minY, previousBaseline + lineCapAscent);
+  }
+
+  let y = Math.max(cursorY, minY);
+  while (y > maxBaselineForPage(page)) {
+    page += 1;
+    y = firstBaselineForPage(page);
+    minY = pageTop(page) + margin + lineCapAscent;
+    y = Math.max(y, minY);
+  }
+
+  return { baselineY: y, pageIndex: page };
+}
+
 /** Single source of truth for worksheet text positions — shared by canvas + cursive links */
 export function layoutWorksheetText(
   ctx: CanvasRenderingContext2D,
@@ -153,6 +184,7 @@ export function layoutWorksheetText(
     margin = PAGE_MARGIN,
     fontMetrics: providedMetrics,
     getCharFontSize,
+    getCharAlign,
   } = options;
 
   const fontFamily = font || 'Playwrite US Modern';
@@ -161,6 +193,7 @@ export function layoutWorksheetText(
   const ruledHeight = metrics.ruledHeight;
   const lineHeight = metrics.lineHeight;
   const resolveFontSize = getCharFontSize ?? (() => fontSize);
+  const resolveCharAlign = getCharAlign ?? (() => textAlign);
   const metricsCache = new Map<number, RuledFontMetrics>([[fontSize, metrics]]);
 
   ctx.textBaseline = 'alphabetic';
@@ -174,6 +207,7 @@ export function layoutWorksheetText(
   const placedLines: PlacedLine[] = [];
   let paragraphStart = 0;
   let lineIndex = 0;
+  let previousLineBaseline: number | null = null;
 
   const maxBaselineForPage = (currentPageIndex: number) =>
     currentPageIndex * PAGE_HEIGHT + PAGE_HEIGHT - margin;
@@ -185,21 +219,34 @@ export function layoutWorksheetText(
     }
     pageIndex += 1;
     baselineY = firstBaselineForPage(pageIndex);
+    previousLineBaseline = null;
   };
 
   for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
     const paragraph = paragraphs[paragraphIndex];
+    const paragraphAlign = resolveCharAlign(paragraphStart);
 
     if (paragraph === '') {
       ensurePageCapacity();
+      const resolved = resolveLineBaseline(
+        baselineY,
+        metrics.capAscent,
+        pageIndex,
+        margin,
+        ruledHeight,
+        previousLineBaseline
+      );
+      baselineY = resolved.baselineY;
+      pageIndex = resolved.pageIndex;
       placedLines.push({
         start: paragraphStart,
         end: paragraphStart,
-        x: alignedLineX(0, startX, availableWidth, textAlign),
+        x: alignedLineX(0, startX, availableWidth, paragraphAlign),
         baselineY,
         pageIndex,
         lineIndex,
       });
+      previousLineBaseline = baselineY;
       baselineY += lineHeight;
       ensurePageCapacity();
       lineIndex += 1;
@@ -223,7 +270,8 @@ export function layoutWorksheetText(
       ensurePageCapacity();
 
       let lineWidth = 0;
-      let lineMaxHeight = lineHeight;
+      let lineMaxHeight = 0;
+      let lineCapAscent = 0;
       const lineChars: Array<{
         char: string;
         charIndex: number;
@@ -250,10 +298,22 @@ export function layoutWorksheetText(
         });
         lineWidth += charWidth;
         lineMaxHeight = Math.max(lineMaxHeight, charMetrics.lineHeight);
+        lineCapAscent = Math.max(lineCapAscent, charMetrics.capAscent);
         consumed += 1;
       }
 
-      let x = alignedLineX(lineWidth, startX, availableWidth, textAlign);
+      const resolved = resolveLineBaseline(
+        baselineY,
+        lineCapAscent,
+        pageIndex,
+        margin,
+        ruledHeight,
+        previousLineBaseline
+      );
+      baselineY = resolved.baselineY;
+      pageIndex = resolved.pageIndex;
+
+      let x = alignedLineX(lineWidth, startX, availableWidth, paragraphAlign);
       const lineX = x;
       const lineStartOffset = paragraphStart + consumed - line.length;
 
@@ -284,15 +344,10 @@ export function layoutWorksheetText(
         lineIndex,
       });
 
-      baselineY += lineMaxHeight;
+      previousLineBaseline = baselineY;
+      baselineY += Math.max(lineMaxHeight, lineHeight);
       ensurePageCapacity();
       lineIndex += 1;
-
-      // The space at a wrap point is dropped from the rendered line but still
-      // occupies one offset in the source text.
-      if (wrapIndex < lines.length - 1) {
-        consumed += 1;
-      }
     }
 
     paragraphStart += paragraph.length + 1;
@@ -355,20 +410,31 @@ export function caretPositionFromLayout(
   const lineIdx = lineIndexForOffset(layout, offset);
   const line = lines[lineIdx];
   const clamped = Math.max(line.start, Math.min(offset, line.end));
+  const lineChars = chars
+    .filter(
+      (char) =>
+        char.lineIndex === line.lineIndex &&
+        char.charIndex >= line.start &&
+        char.charIndex < line.end
+    )
+    .sort((a, b) => a.charIndex - b.charIndex);
 
   if (clamped >= line.end) {
-    const lastChar = [...chars]
-      .reverse()
-      .find((char) => char.lineIndex === line.lineIndex && char.charIndex < line.end);
+    const lastChar = lineChars[lineChars.length - 1];
     if (lastChar) {
       return { x: lastChar.x + lastChar.width, baselineY: line.baselineY };
     }
     return { x: line.x, baselineY: line.baselineY };
   }
 
-  const atChar = chars.find((char) => char.charIndex === clamped);
+  const atChar = lineChars.find((char) => char.charIndex === clamped);
   if (atChar) {
-    return { x: atChar.x, baselineY: atChar.baselineY };
+    return { x: atChar.x, baselineY: line.baselineY };
+  }
+
+  const previousChar = [...lineChars].reverse().find((char) => char.charIndex < clamped);
+  if (previousChar) {
+    return { x: previousChar.x + previousChar.width, baselineY: line.baselineY };
   }
 
   return { x: line.x, baselineY: line.baselineY };

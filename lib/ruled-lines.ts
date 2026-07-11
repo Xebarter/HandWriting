@@ -123,9 +123,18 @@ export function lineRowMetrics(
   line: PlacedLine
 ): LineRowMetrics {
   const lineChars = layout.chars.filter((char) => char.lineIndex === line.lineIndex);
-  let capAscent = layout.metrics.capAscent;
-  let xAscent = layout.metrics.xAscent;
-  let lineHeight = layout.lineHeight;
+
+  if (lineChars.length === 0) {
+    return {
+      capAscent: layout.metrics.capAscent,
+      xAscent: layout.metrics.xAscent,
+      lineHeight: layout.lineHeight,
+    };
+  }
+
+  let capAscent = 0;
+  let xAscent = 0;
+  let lineHeight = 0;
 
   for (const char of lineChars) {
     capAscent = Math.max(capAscent, char.capAscent);
@@ -134,6 +143,41 @@ export function lineRowMetrics(
   }
 
   return { capAscent, xAscent, lineHeight };
+}
+
+/**
+ * Metrics for empty ruled rows below the last line of text. Spacing follows the
+ * rhythm of lines above on the page; it only grows when the last line has text
+ * larger than the document default.
+ */
+export function trailingRowMetrics(
+  linesOnPage: PlacedLine[],
+  layout: WorksheetTextLayout
+): LineRowMetrics {
+  const lastLine = linesOnPage[linesOnPage.length - 1];
+  const lastRow = lineRowMetrics(layout, lastLine);
+
+  let referenceSpacing = layout.lineHeight;
+  if (linesOnPage.length >= 2) {
+    const prevLine = linesOnPage[linesOnPage.length - 2];
+    referenceSpacing = lastLine.baselineY - prevLine.baselineY;
+  }
+
+  const spacing = Math.max(referenceSpacing, lastRow.lineHeight);
+
+  if (lastRow.lineHeight > layout.lineHeight) {
+    return {
+      capAscent: lastRow.capAscent,
+      xAscent: lastRow.xAscent,
+      lineHeight: spacing,
+    };
+  }
+
+  return {
+    capAscent: layout.metrics.capAscent,
+    xAscent: layout.metrics.xAscent,
+    lineHeight: spacing,
+  };
 }
 
 /**
@@ -183,13 +227,13 @@ export function drawRuledLinesFromLayout(
     }
 
     const lastLine = linesOnPage[linesOnPage.length - 1];
-    const lastRow = lineRowMetrics(layout, lastLine);
+    const trailingRow = trailingRowMetrics(linesOnPage, layout);
     for (
-      let baselineY = lastLine.baselineY + lastRow.lineHeight;
+      let baselineY = lastLine.baselineY + trailingRow.lineHeight;
       baselineY <= area.bottom;
-      baselineY += fallbackLineHeight
+      baselineY += trailingRow.lineHeight
     ) {
-      const guide = ruledRowGuide(baselineY, fallbackCap, fallbackX);
+      const guide = ruledRowGuide(baselineY, trailingRow.capAscent, trailingRow.xAscent);
       if (guide.topY < area.top) continue;
       drawRuledRowLines(ctx, guide, area);
     }

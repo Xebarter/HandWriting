@@ -1,11 +1,11 @@
 'use client';
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { AlertCircle, CheckCircle, Copy, Download, FilePlus, FolderOpen, Loader2, LogOut, Printer, Save } from 'lucide-react';
 import { AppLogo } from '@/components/AppLogo';
 import { useRouter } from 'next/navigation';
 import { DocumentRibbon } from '@/components/word/DocumentRibbon';
-import { DocumentWorkspace } from '@/components/word/DocumentWorkspace';
+import { DocumentWorkspace, type EditorActions } from '@/components/word/DocumentWorkspace';
 import { DocumentPicker } from '@/components/word/DocumentPicker';
 import { WordStatusBar } from '@/components/word/WordStatusBar';
 import { HandwritingMode, PaperType, FontMetadata, LetterConnection, TextStyleRange } from '@/lib/types';
@@ -36,14 +36,29 @@ import {
 } from '@/lib/worksheet-draft';
 import { createClient } from '@/lib/supabase/client';
 import { ensureSupabaseSession } from '@/lib/supabase/session';
-import { autoConnectLetters, rebaseConnections, reconcileConnections } from '@/lib/connection-engine';
+import { autoConnectLetters, rebaseConnections, reconcileConnections, removeConnectionsInRange, mergeConnections, connectionFullyInRange } from '@/lib/connection-engine';
 import { LetterBox } from '@/lib/types';
 import { RuledFontMetrics } from '@/lib/font-metrics';
 import {
   applyTextStyleToRange,
+  applyParagraphAlignToRange,
   getResolvedTextStyle,
   rebaseTextStyleRanges,
+  stripModeFromRanges,
 } from '@/lib/text-style-ranges';
+import { getParagraphBounds, getParagraphRangesForSelection } from '@/lib/paragraph-bounds';
+import { HistoryEntry } from '@/lib/undo-history';
+
+function cloneConnections(connections: LetterConnection[]): LetterConnection[] {
+  return connections.map((connection) => ({
+    ...connection,
+    points: connection.points.map((point) => ({ ...point })),
+  }));
+}
+
+function cloneTextStyleRanges(ranges: TextStyleRange[]): TextStyleRange[] {
+  return ranges.map((range) => ({ ...range }));
+}
 
 function countWords(text: string): number {
   const trimmed = text.trim();
@@ -57,6 +72,8 @@ export const EditorInterface: React.FC = () => {
   const [text, setText] = useState('');
   const [mode, setMode] = useState<HandwritingMode>('solid');
   const [fontSize, setFontSize] = useState(48);
+  /** Base size for unstyled text and ruled-line metrics — not the ribbon display alone. */
+  const [defaultFontSize, setDefaultFontSize] = useState(48);
   const [dotSpacing, setDotSpacing] = useState(8);
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [paperType, setPaperType] = useState<PaperType>('ruled');
@@ -125,7 +142,7 @@ export const EditorInterface: React.FC = () => {
       title: documentTitle,
       text,
       mode,
-      fontSize,
+      fontSize: defaultFontSize,
       dotSpacing,
       strokeWidth,
       paperType,
@@ -143,7 +160,7 @@ export const EditorInterface: React.FC = () => {
       documentTitle,
       text,
       mode,
-      fontSize,
+      defaultFontSize,
       dotSpacing,
       strokeWidth,
       paperType,
@@ -176,6 +193,7 @@ export const EditorInterface: React.FC = () => {
       setText(state.text);
       setMode(state.mode);
       setFontSize(state.fontSize);
+      setDefaultFontSize(state.fontSize);
       setDotSpacing(state.dotSpacing);
       setStrokeWidth(state.strokeWidth);
       setPaperType(state.paperType);
@@ -299,9 +317,10 @@ export const EditorInterface: React.FC = () => {
       getResolvedTextStyle(textStyleRanges, charIndex, {
         mode,
         linksEnabled: autoLinkEnabled,
-        fontSize,
+        fontSize: defaultFontSize,
+        textAlign,
       }),
-    [textStyleRanges, mode, autoLinkEnabled, fontSize]
+    [textStyleRanges, mode, autoLinkEnabled, defaultFontSize, textAlign]
   );
 
   const getCharFontSize = useCallback(
@@ -311,6 +330,11 @@ export const EditorInterface: React.FC = () => {
 
   const getCharMode = useCallback(
     (charIndex: number) => getCharStyle(charIndex).mode,
+    [getCharStyle]
+  );
+
+  const getCharAlign = useCallback(
+    (charIndex: number) => getCharStyle(charIndex).textAlign,
     [getCharStyle]
   );
 
@@ -340,6 +364,7 @@ export const EditorInterface: React.FC = () => {
   );
 
   const handleConnectionsChange = useCallback((next: LetterConnection[]) => {
+    editorActionsRef.current?.recordHistory('other');
     setAutoLinkEnabled(false);
     setConnections(next);
     setIsDirty(true);
@@ -352,7 +377,8 @@ export const EditorInterface: React.FC = () => {
         getResolvedTextStyle(textStyleRanges, charIndex, {
           mode,
           linksEnabled: true,
-          fontSize,
+          fontSize: defaultFontSize,
+          textAlign,
         });
 
       setConnections(
@@ -365,28 +391,49 @@ export const EditorInterface: React.FC = () => {
     }
     setConnectMode(false);
     setIsDirty(true);
-  }, [mode, strokeWidth, textStyleRanges]);
+  }, [mode, strokeWidth, textStyleRanges, textAlign]);
 
   const handleClearConnections = useCallback(() => {
+    editorActionsRef.current?.recordHistory('other');
     setAutoLinkEnabled(false);
     setConnections([]);
     setIsDirty(true);
   }, []);
 
   const editorSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const [selectionRange, setSelectionRange] = useState<{ start: number; end: number } | null>(null);
   const lastSelectionStyleRef = useRef<{ index: number; fontSize: number } | null>(null);
-  const editorActionsRef = useRef<{ selectAll: () => void } | null>(null);
+  const editorActionsRef = useRef<EditorActions | null>(null);
+  const defaultFontSizeRef = useRef(defaultFontSize);
+  defaultFontSizeRef.current = defaultFontSize;
   const fontSizeRef = useRef(fontSize);
   fontSizeRef.current = fontSize;
 
   const handleEditorSelectionChange = useCallback(
     (selection: { start: number; end: number }) => {
       editorSelectionRef.current = selection;
+      setSelectionRange(selection);
+
       const index = selection.start;
+      const { start: paragraphStart } = getParagraphBounds(text, index);
+      const paragraphAlign = getResolvedTextStyle(textStyleRanges, paragraphStart, {
+        mode,
+        linksEnabled: autoLinkEnabled,
+        fontSize: defaultFontSizeRef.current,
+        textAlign,
+      }).textAlign;
+      setTextAlign((current) => (current === paragraphAlign ? current : paragraphAlign));
+
+      // Sync ribbon font size only for a collapsed caret. Updating during range
+      // selection relayouts default-sized text and shifts hit-testing, which can
+      // feed back into selection updates.
+      if (selection.start !== selection.end) return;
+
       const resolved = getResolvedTextStyle(textStyleRanges, index, {
         mode,
         linksEnabled: autoLinkEnabled,
-        fontSize: fontSizeRef.current,
+        fontSize: defaultFontSizeRef.current,
+        textAlign,
       });
       const last = lastSelectionStyleRef.current;
       if (last && last.index === index && last.fontSize === resolved.fontSize) {
@@ -397,7 +444,7 @@ export const EditorInterface: React.FC = () => {
         current === resolved.fontSize ? current : resolved.fontSize
       );
     },
-    [autoLinkEnabled, mode, textStyleRanges]
+    [autoLinkEnabled, mode, text, textAlign, textStyleRanges]
   );
 
   const handleActivePageChange = useCallback((page: number, total: number) => {
@@ -414,11 +461,29 @@ export const EditorInterface: React.FC = () => {
   );
 
   const registerEditorActions = useCallback(
-    (actions: { selectAll: () => void }) => {
+    (actions: EditorActions) => {
       editorActionsRef.current = actions;
     },
     []
   );
+
+  const getDocumentHistoryState = useCallback(
+    () => ({
+      connections: cloneConnections(connections),
+      autoLinkEnabled,
+      textStyleRanges: cloneTextStyleRanges(textStyleRanges),
+    }),
+    [autoLinkEnabled, connections, textStyleRanges]
+  );
+
+  const applyHistoryEntry = useCallback((entry: HistoryEntry) => {
+    setText(entry.text);
+    setConnections(cloneConnections(entry.connections));
+    setAutoLinkEnabled(entry.autoLinkEnabled);
+    setTextStyleRanges(cloneTextStyleRanges(entry.textStyleRanges));
+    saveWorksheetDraft(entry.text);
+    setIsDirty(true);
+  }, []);
 
   const getEditorSelectionOffsets = useCallback(() => {
     return editorSelectionRef.current;
@@ -569,6 +634,7 @@ export const EditorInterface: React.FC = () => {
     setText(defaults.text);
     setMode(defaults.mode);
     setFontSize(defaults.fontSize);
+    setDefaultFontSize(defaults.fontSize);
     setDotSpacing(defaults.dotSpacing);
     setStrokeWidth(defaults.strokeWidth);
     setPaperType(defaults.paperType);
@@ -681,22 +747,18 @@ export const EditorInterface: React.FC = () => {
     [installedFonts, ensureInstalled, fontSize, updateFontSelection]
   );
 
-  const handleModeChange = useCallback(
-    (nextMode: HandwritingMode) => {
-      applySelectionTextStyle({ mode: nextMode }, () => {
-        setMode(nextMode);
-        setIsDirty(true);
-      });
-    },
-    [applySelectionTextStyle]
-  );
+  const handleModeChange = useCallback((nextMode: HandwritingMode) => {
+    setMode(nextMode);
+    setTextStyleRanges(stripModeFromRanges);
+    setIsDirty(true);
+  }, []);
 
   const handleFontSizeChange = useCallback(
     (value: number) => {
-      applySelectionTextStyle({ fontSize: value }, () => {
-        setFontSize(value);
-      });
       setFontSize(value);
+      applySelectionTextStyle({ fontSize: value }, () => {
+        setDefaultFontSize(value);
+      });
       setIsDirty(true);
     },
     [applySelectionTextStyle]
@@ -707,28 +769,23 @@ export const EditorInterface: React.FC = () => {
     if (layout.length === 0) return;
 
     const offsets = getEditorSelectionOffsets();
-    // If there's no selection (collapsed or missing), link all adjacent letters.
-    if (!offsets || offsets.start === offsets.end) {
-      handleAutoConnect();
-      return;
-    }
+    if (!offsets || offsets.start === offsets.end) return;
+
+    editorActionsRef.current?.recordHistory('other');
 
     const selectionStart = offsets.start;
     const selectionEnd = offsets.end;
 
-    // Persist "linksEnabled" styling for the selected range (so future actions can
-    // respect the user's selection).
     setTextStyleRanges((current) =>
       applyTextStyleToRange(current, selectionStart, selectionEnd, { linksEnabled: true })
     );
 
-    // IMPORTANT: compute connections immediately from the selection offsets so we
-    // don't depend on React state updates finishing first.
     const getScopedCharStyle = (charIndex: number) => {
       const resolved = getResolvedTextStyle(textStyleRanges, charIndex, {
         mode,
         linksEnabled: false,
-        fontSize,
+        fontSize: defaultFontSize,
+        textAlign,
       });
       return {
         ...resolved,
@@ -736,37 +793,118 @@ export const EditorInterface: React.FC = () => {
       };
     };
 
+    const selectionConnections = autoConnectLetters(layout, {
+      color: '#9aa0a6',
+      width: Math.max(1, strokeWidth),
+      getCharStyle: getScopedCharStyle,
+    }).filter((connection) =>
+      connectionFullyInRange(connection, selectionStart, selectionEnd)
+    );
+
     setAutoLinkEnabled(false);
-    setConnections(
-      autoConnectLetters(layout, {
-        color: '#9aa0a6',
-        width: Math.max(1, strokeWidth),
-        getCharStyle: getScopedCharStyle,
-      })
+    setConnections((current) =>
+      mergeConnections(
+        removeConnectionsInRange(current, selectionStart, selectionEnd),
+        selectionConnections
+      )
     );
     setConnectMode(false);
     setIsDirty(true);
   }, [
     getEditorSelectionOffsets,
-    handleAutoConnect,
     mode,
     strokeWidth,
     textStyleRanges,
-    fontSize,
+    defaultFontSize,
   ]);
 
   const handleDisableLinks = useCallback(() => {
-    setAutoLinkEnabled(false);
-    setConnections([]);
-    setIsDirty(true);
-
     const offsets = getEditorSelectionOffsets();
-    if (offsets && offsets.start !== offsets.end) {
-      setTextStyleRanges((current) =>
-        applyTextStyleToRange(current, offsets.start, offsets.end, { linksEnabled: false })
-      );
-    }
+    if (!offsets || offsets.start === offsets.end) return;
+
+    editorActionsRef.current?.recordHistory('other');
+
+    const selectionStart = offsets.start;
+    const selectionEnd = offsets.end;
+
+    setAutoLinkEnabled(false);
+    setTextStyleRanges((current) =>
+      applyTextStyleToRange(current, selectionStart, selectionEnd, { linksEnabled: false })
+    );
+    setConnections((current) =>
+      removeConnectionsInRange(current, selectionStart, selectionEnd)
+    );
+    setIsDirty(true);
   }, [getEditorSelectionOffsets]);
+
+  const canLinkSelection = Boolean(
+    selectionRange && selectionRange.start !== selectionRange.end
+  );
+
+  const linksActive = useMemo(() => {
+    if (!selectionRange || selectionRange.start === selectionRange.end) {
+      return false;
+    }
+
+    const { start, end } = selectionRange;
+    const styleDefaults = {
+      mode,
+      linksEnabled: autoLinkEnabled,
+      fontSize: defaultFontSize,
+      textAlign,
+    };
+
+    for (let index = start; index < end; index += 1) {
+      if (getResolvedTextStyle(textStyleRanges, index, styleDefaults).linksEnabled) {
+        return true;
+      }
+    }
+
+    return connections.some((connection) =>
+      connectionFullyInRange(connection, start, end)
+    );
+  }, [
+    autoLinkEnabled,
+    connections,
+    defaultFontSize,
+    mode,
+    selectionRange,
+    textStyleRanges,
+    textAlign,
+  ]);
+
+  const handleTextAlignChange = useCallback(
+    (value: 'left' | 'center' | 'right') => {
+      const offsets = getEditorSelectionOffsets();
+      const selStart = offsets?.start ?? 0;
+      const selEnd = offsets?.end ?? selStart;
+
+      editorActionsRef.current?.recordHistory('other');
+
+      const paragraphRanges = getParagraphRangesForSelection(text, selStart, selEnd);
+      setTextStyleRanges((current) => {
+        let next = current;
+        for (const range of paragraphRanges) {
+          next = applyParagraphAlignToRange(next, range.start, range.end, text, value);
+        }
+        return next;
+      });
+      setTextAlign(value);
+      setIsDirty(true);
+    },
+    [getEditorSelectionOffsets, text]
+  );
+
+  const handleToggleLinks = useCallback(() => {
+    if (!canLinkSelection) return;
+
+    if (linksActive) {
+      handleDisableLinks();
+      return;
+    }
+
+    handleEnableLinks();
+  }, [canLinkSelection, handleDisableLinks, handleEnableLinks, linksActive]);
 
   const getWorksheetSnapshot = useCallback(
     async (dpi: number = 96) => {
@@ -777,7 +915,7 @@ export const EditorInterface: React.FC = () => {
         height: renderedPageHeight,
         text,
         mode,
-        fontSize,
+        fontSize: defaultFontSize,
         dotSpacing,
         strokeWidth,
         textColor,
@@ -792,7 +930,7 @@ export const EditorInterface: React.FC = () => {
       renderedPageHeight,
       text,
       mode,
-      fontSize,
+      defaultFontSize,
       dotSpacing,
       strokeWidth,
       textColor,
@@ -876,6 +1014,7 @@ export const EditorInterface: React.FC = () => {
     setText(defaults.text);
     setMode(defaults.mode);
     setFontSize(defaults.fontSize);
+    setDefaultFontSize(defaults.fontSize);
     setDotSpacing(defaults.dotSpacing);
     setStrokeWidth(defaults.strokeWidth);
     setPaperType(defaults.paperType);
@@ -1045,10 +1184,7 @@ export const EditorInterface: React.FC = () => {
           setIsDirty(true);
         }}
         textAlign={textAlign}
-        onTextAlignChange={(value) => {
-          setTextAlign(value);
-          setIsDirty(true);
-        }}
+        onTextAlignChange={handleTextAlignChange}
         onUppercase={applyUppercase}
         onLowercase={applyLowercase}
         onCapitalize={applyCapitalize}
@@ -1086,14 +1222,10 @@ export const EditorInterface: React.FC = () => {
         onCopy={handleCopy}
         onPrint={handlePrint}
         onReset={handleReset}
-        connectMode={connectMode}
-        onConnectModeChange={(value) => {
-          setConnectMode(value);
-          setIsDirty(true);
-        }}
-        onAutoConnect={handleEnableLinks}
+        linksActive={linksActive}
+        canLinkSelection={canLinkSelection}
+        onToggleLinks={handleToggleLinks}
         onClearConnections={handleDisableLinks}
-        connectionCount={connections.length}
         fontLibrary={{
           fonts: installedFonts,
           loading: fontsLoading,
@@ -1108,7 +1240,7 @@ export const EditorInterface: React.FC = () => {
         text={text}
         onTextChange={handleTextChange}
         mode={mode}
-        fontSize={fontSize}
+        fontSize={defaultFontSize}
         dotSpacing={dotSpacing}
         strokeWidth={strokeWidth}
         paperType={paperType}
@@ -1128,10 +1260,13 @@ export const EditorInterface: React.FC = () => {
         onLetterLayoutChange={handleLetterLayoutChange}
         getCharMode={getCharMode}
         getCharFontSize={getCharFontSize}
+        getCharAlign={getCharAlign}
         onActivePageChange={handleActivePageChange}
         onDocumentMetricsChange={handleDocumentMetricsChange}
         onSelectionChange={handleEditorSelectionChange}
         registerEditorActions={registerEditorActions}
+        getDocumentHistoryState={getDocumentHistoryState}
+        onHistoryApply={applyHistoryEntry}
       />
 
       <WordStatusBar

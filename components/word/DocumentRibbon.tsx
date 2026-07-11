@@ -6,11 +6,9 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
-  CircleDot,
   Copy,
   Download,
   Grid3x3,
-  Link2,
   Minus,
   PenLine,
   Plus,
@@ -20,9 +18,10 @@ import {
   Type,
 } from 'lucide-react';
 import { HandwritingMode, PaperType, FontMetadata } from '@/lib/types';
-import { FONT_FAMILIES, FONT_SIZES } from '@/lib/document-constants';
+import { FONT_SIZES } from '@/lib/document-constants';
 import { FontManager } from '@/components/FontManager';
 import { RibbonGroup } from './RibbonGroup';
+import { FontFamilySelect } from './FontFamilySelect';
 import { RibbonButton, RibbonDivider } from './RibbonButton';
 import { cn } from '@/lib/utils';
 
@@ -72,11 +71,10 @@ interface DocumentRibbonProps {
   onCopy: () => void;
   onPrint: () => void;
   onReset: () => void;
-  connectMode: boolean;
-  onConnectModeChange: (enabled: boolean) => void;
-  onAutoConnect: () => void;
+  linksActive: boolean;
+  canLinkSelection: boolean;
+  onToggleLinks: () => void;
   onClearConnections: () => void;
-  connectionCount: number;
 }
 
 const TABS: { id: RibbonTab; label: string }[] = [
@@ -86,7 +84,6 @@ const TABS: { id: RibbonTab; label: string }[] = [
 
 const MODE_OPTIONS: { id: HandwritingMode; label: string; icon: React.ReactNode }[] = [
   { id: 'solid', label: 'Solid', icon: <Type size={14} /> },
-  { id: 'dotted', label: 'Dotted', icon: <CircleDot size={14} /> },
   { id: 'outline', label: 'Outline', icon: <PenLine size={14} /> },
   { id: 'guide-lines', label: 'Guide Lines', icon: <Rows3 size={14} /> },
 ];
@@ -140,34 +137,11 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
         {activeTab === 'home' && (
           <>
             <RibbonGroup label="Font">
-              <select
-                value={props.selectedFont}
-                onChange={(e) => props.onFontFamilyChange(e.target.value)}
-                className="word-select h-7 w-[140px] shrink-0 text-[11px]"
-                aria-label="Font family"
-              >
-                <optgroup label="Built-in">
-                  {FONT_FAMILIES.map((f) => (
-                    <option key={f} value={f} style={{ fontFamily: f }}>
-                      {f}
-                    </option>
-                  ))}
-                </optgroup>
-                {props.installedFonts.length > 0 && (
-                  <optgroup label="My Fonts">
-                    {props.installedFonts.map((f) => (
-                      <option key={f.id} value={f.family} style={{ fontFamily: f.family }}>
-                        {f.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-                {props.selectedFont &&
-                  !FONT_FAMILIES.includes(props.selectedFont as (typeof FONT_FAMILIES)[number]) &&
-                  !props.installedFonts.some((f) => f.family === props.selectedFont) && (
-                    <option value={props.selectedFont}>{props.selectedFont}</option>
-                  )}
-              </select>
+              <FontFamilySelect
+                selectedFont={props.selectedFont}
+                installedFonts={props.installedFonts}
+                onFontFamilyChange={props.onFontFamilyChange}
+              />
 
               <Popover.Root open={fontPopoverOpen} onOpenChange={setFontPopoverOpen}>
                 <Popover.Trigger
@@ -240,21 +214,21 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
                   icon={<AlignLeft size={14} />}
                   active={props.textAlign === 'left'}
                   onClick={() => props.onTextAlignChange('left')}
-                  title="Align left"
+                  title="Align left (current paragraph)"
                   className="h-7 w-7 px-0"
                 />
                 <RibbonButton
                   icon={<AlignCenter size={14} />}
                   active={props.textAlign === 'center'}
                   onClick={() => props.onTextAlignChange('center')}
-                  title="Align center"
+                  title="Align center (current paragraph)"
                   className="h-7 w-7 px-0"
                 />
                 <RibbonButton
                   icon={<AlignRight size={14} />}
                   active={props.textAlign === 'right'}
                   onClick={() => props.onTextAlignChange('right')}
-                  title="Align right"
+                  title="Align right (current paragraph)"
                   className="h-7 w-7 px-0"
                 />
               </div>
@@ -292,21 +266,6 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
                 ))}
               </div>
 
-              {props.mode === 'dotted' && (
-                <>
-                  <RibbonDivider />
-                  <input
-                    type="range"
-                    min={4}
-                    max={16}
-                    value={props.dotSpacing}
-                    onChange={(e) => props.onDotSpacingChange(Number(e.target.value))}
-                    className="word-range w-16"
-                    aria-label="Dot spacing"
-                    title={`Dot spacing: ${props.dotSpacing}px`}
-                  />
-                </>
-              )}
               {props.mode === 'outline' && (
                 <>
                   <RibbonDivider />
@@ -326,26 +285,26 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
 
             <RibbonGroup label="Cursive Links">
               <RibbonButton
-                icon={<Link2 size={14} />}
                 label="Link"
-                active={props.connectMode}
-                onClick={() => props.onConnectModeChange(!props.connectMode)}
-                title="Draw cursive training links between letters"
-                compact
-              />
-              <RibbonButton
-                label="Auto Link"
-                onClick={props.onAutoConnect}
+                active={props.linksActive}
+                onClick={props.onToggleLinks}
                 onMouseDown={(e) => e.preventDefault()}
-                title="Create tracing links for all adjacent letters"
+                disabled={!props.canLinkSelection}
+                title={
+                  !props.canLinkSelection
+                    ? 'Select text to add or remove cursive links'
+                    : props.linksActive
+                      ? 'Remove cursive links from the selection'
+                      : 'Join letters in the selection with cursive links'
+                }
                 compact
               />
               <RibbonButton
                 label="Clear"
                 onClick={props.onClearConnections}
-                title="Remove all cursive links"
+                title="Remove cursive links from the selection"
                 compact
-                disabled={props.connectionCount === 0}
+                disabled={!props.canLinkSelection || !props.linksActive}
               />
             </RibbonGroup>
 

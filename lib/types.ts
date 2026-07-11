@@ -156,6 +156,7 @@ export interface TextStyleRange {
   mode?: HandwritingMode;
   linksEnabled?: boolean;
   fontSize?: number;
+  textAlign?: 'left' | 'center' | 'right';
 }
 
 export interface LetterBox {

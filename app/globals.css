@@ -253,11 +253,17 @@
   }
   50%,
   100% {
-    opacity: 0;
+    opacity: 0.55;
   }
 }
 
 .word-editor-caret {
+  width: 2px;
+  background-color: #185abd;
+  border-radius: 0.5px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.95),
+    0 0 0 2px rgba(24, 90, 189, 0.18);
   animation: word-caret-blink 1.06s step-end infinite;
 }
 

@@ -237,3 +237,40 @@ export function measureRuledFont(
 export function formatCanvasFont(fontFamily: string, size: number): string {
   return `${size}px ${formatFamily(fontFamily)}`;
 }
+
+/** Punctuation that should rest on the ruled baseline, not descend through it. */
+const BASELINE_SNAP_CHARS = new Set([
+  '|',
+  '/',
+  '\\',
+  '!',
+  '?',
+  '+',
+  '-',
+  '=',
+  '<',
+  '>',
+  '[',
+  ']',
+  '{',
+  '}',
+]);
+
+/**
+ * Adjust draw Y so tall punctuation sits on the ruled baseline instead of
+ * crossing it (common with "|" in handwriting fonts).
+ */
+export function ruledCharDrawY(
+  ctx: CanvasRenderingContext2D,
+  char: string,
+  baselineY: number,
+  fontFamily: string,
+  renderSize: number
+): number {
+  if (!BASELINE_SNAP_CHARS.has(char)) return baselineY;
+
+  ctx.font = formatCanvasFont(fontFamily, renderSize);
+  ctx.textBaseline = 'alphabetic';
+  const descent = ctx.measureText(char).actualBoundingBoxDescent ?? 0;
+  return descent > 0.25 ? baselineY - descent : baselineY;
+}

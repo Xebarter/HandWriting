@@ -1,9 +1,12 @@
 import { HandwritingMode, TextStyleRange } from '@/lib/types';
 
+export type TextAlign = 'left' | 'center' | 'right';
+
 export interface ResolvedTextStyle {
   mode: HandwritingMode;
   linksEnabled: boolean;
   fontSize: number;
+  textAlign: TextAlign;
 }
 
 export function getResolvedTextStyle(
@@ -19,6 +22,7 @@ export function getResolvedTextStyle(
       mode: range.mode ?? resolved.mode,
       linksEnabled: range.linksEnabled ?? resolved.linksEnabled,
       fontSize: range.fontSize ?? resolved.fontSize,
+      textAlign: range.textAlign ?? resolved.textAlign,
     };
   }
 
@@ -29,7 +33,8 @@ function sameStyle(a: TextStyleRange, b: TextStyleRange): boolean {
   return (
     a.mode === b.mode &&
     a.linksEnabled === b.linksEnabled &&
-    a.fontSize === b.fontSize
+    a.fontSize === b.fontSize &&
+    a.textAlign === b.textAlign
   );
 }
 
@@ -56,7 +61,7 @@ export function applyTextStyleToRange(
   ranges: TextStyleRange[],
   start: number,
   end: number,
-  patch: Partial<Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'fontSize'>>
+  patch: Partial<Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'fontSize' | 'textAlign'>>
 ): TextStyleRange[] {
   if (end <= start) return ranges;
 
@@ -82,9 +87,48 @@ export function applyTextStyleToRange(
     mode: patch.mode,
     linksEnabled: patch.linksEnabled,
     fontSize: patch.fontSize,
+    textAlign: patch.textAlign,
   });
 
   return normalizeTextStyleRanges(next);
+}
+
+export function stripModeFromRanges(ranges: TextStyleRange[]): TextStyleRange[] {
+  return normalizeTextStyleRanges(
+    ranges
+      .map(({ mode: _mode, ...rest }) => rest)
+      .filter(
+        (range) =>
+          range.linksEnabled !== undefined ||
+          range.fontSize !== undefined ||
+          range.textAlign !== undefined
+      )
+  );
+}
+
+/** Apply paragraph alignment even when the paragraph has no visible characters. */
+export function applyParagraphAlignToRange(
+  ranges: TextStyleRange[],
+  paragraphStart: number,
+  paragraphEnd: number,
+  text: string,
+  textAlign: TextAlign
+): TextStyleRange[] {
+  let applyStart = paragraphStart;
+  let applyEnd = paragraphEnd;
+
+  if (applyEnd <= applyStart) {
+    if (applyStart < text.length && text[applyStart] === '\n') {
+      applyEnd = applyStart + 1;
+    } else if (applyStart > 0 && text[applyStart - 1] === '\n') {
+      applyStart -= 1;
+      applyEnd = applyStart + 1;
+    } else {
+      return ranges;
+    }
+  }
+
+  return applyTextStyleToRange(ranges, applyStart, applyEnd, { textAlign });
 }
 
 export function rebaseTextStyleRanges(

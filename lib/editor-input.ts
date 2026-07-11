@@ -27,6 +27,39 @@ export function normalizeEditorText(value: string): string {
   return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
+export interface PhysicalKeyState {
+  code: string;
+  shiftKey: boolean;
+}
+
+export function isPrintableKeyEvent(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>
+): boolean {
+  return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+/**
+ * Map browser input data to the intended character using the physical key.
+ * event.key / InputEvent.data often report "/" for both slash keys on Windows.
+ */
+export function resolveInsertedCharacter(
+  physical: PhysicalKeyState | null,
+  fallback: string
+): string {
+  if (!fallback || !physical) return fallback;
+
+  switch (physical.code) {
+    case 'Slash':
+    case 'NumpadDivide':
+      return physical.shiftKey ? fallback : '/';
+    case 'Backslash':
+    case 'IntlBackslash':
+      return physical.shiftKey ? '|' : '\\';
+    default:
+      return fallback;
+  }
+}
+
 export function deleteRange(text: string, range: TextRange): { text: string; range: TextRange } {
   const { start, end } = rangeBounds(range);
   const nextText = text.slice(0, start) + text.slice(end);

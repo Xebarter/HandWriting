@@ -1,6 +1,6 @@
 import { HandwritingMode } from './types';
-import { formatCanvasFont, RuledFontMetrics } from './font-metrics';
-import { drawLetterGuideLines, ruledRowGuide } from './ruled-lines';
+import { formatCanvasFont, ruledCharDrawY, RuledFontMetrics } from './font-metrics';
+import { drawLetterGuideLines, lineRowMetrics, ruledRowGuide } from './ruled-lines';
 import { layoutWorksheetText, PlacedChar, WorksheetTextLayout, WorksheetTextOptions } from './text-line-layout';
 
 export type { WorksheetTextOptions } from './text-line-layout';
@@ -17,6 +17,27 @@ function drawGuideLines(
     ruledRowGuide(baselineY, metrics.capAscent, metrics.xAscent),
     metrics.ruledHeight * 0.75
   );
+}
+
+function lineGuideMetrics(
+  layout: WorksheetTextLayout,
+  placed: PlacedChar
+): Pick<RuledFontMetrics, 'capAscent' | 'xAscent' | 'ruledHeight'> {
+  const line = layout.lines.find((entry) => entry.lineIndex === placed.lineIndex);
+  if (!line) {
+    return {
+      capAscent: placed.capAscent,
+      xAscent: placed.xAscent,
+      ruledHeight: placed.fontSize,
+    };
+  }
+
+  const row = lineRowMetrics(layout, line);
+  return {
+    capAscent: row.capAscent,
+    xAscent: row.xAscent,
+    ruledHeight: row.lineHeight,
+  };
 }
 
 interface StrokePoint {
@@ -516,9 +537,16 @@ function drawCharDashes(
 
   const { segments, dots, originX, originY, scale } = glyph;
   const strokeWidth = Math.max(1.6, renderSize * 0.05);
+  const drawBaselineY = ruledCharDrawY(
+    ctx,
+    placed.char,
+    placed.baselineY,
+    fontFamily,
+    renderSize
+  );
 
   const toX = (px: number) => placed.x + (px - originX) / scale;
-  const toY = (py: number) => placed.baselineY + (py - originY) / scale;
+  const toY = (py: number) => drawBaselineY + (py - originY) / scale;
 
   ctx.save();
   ctx.strokeStyle = dotColor;
@@ -552,11 +580,13 @@ function drawPlacedChar(
   mode: HandwritingMode,
   options: WorksheetTextOptions
 ) {
-  const { ruledHeight, fontFamily } = layout;
+  const { fontFamily } = layout;
   const { dotSpacing, strokeWidth, textColor, dotColor } = options;
   const renderSize = placed.renderSize;
 
   ctx.font = formatCanvasFont(fontFamily, renderSize);
+  ctx.textBaseline = 'alphabetic';
+  const drawY = ruledCharDrawY(ctx, placed.char, placed.baselineY, fontFamily, renderSize);
 
   if (mode === 'dotted') {
     drawCharDashes(ctx, placed, renderSize, dotSpacing, dotColor, fontFamily);
@@ -566,38 +596,30 @@ function drawPlacedChar(
   if (mode === 'outline') {
     ctx.strokeStyle = textColor;
     ctx.lineWidth = strokeWidth;
-    ctx.strokeText(placed.char, placed.x, placed.baselineY);
+    ctx.strokeText(placed.char, placed.x, drawY);
     return;
   }
 
   if (mode === 'solid') {
     ctx.fillStyle = textColor;
-    ctx.fillText(placed.char, placed.x, placed.baselineY);
+    ctx.fillText(placed.char, placed.x, drawY);
     return;
   }
 
   if (mode === 'guide-lines') {
-    drawGuideLines(ctx, placed.x, placed.baselineY, {
-      capAscent: placed.capAscent,
-      xAscent: placed.xAscent,
-      ruledHeight,
-    });
+    drawGuideLines(ctx, placed.x, placed.baselineY, lineGuideMetrics(layout, placed));
     ctx.fillStyle = textColor;
     ctx.globalAlpha = 0.3;
-    ctx.fillText(placed.char, placed.x, placed.baselineY);
+    ctx.fillText(placed.char, placed.x, drawY);
     ctx.globalAlpha = 1;
     return;
   }
 
   if (mode === 'arrow-guides') {
-    drawGuideLines(ctx, placed.x, placed.baselineY, {
-      capAscent: placed.capAscent,
-      xAscent: placed.xAscent,
-      ruledHeight,
-    });
+    drawGuideLines(ctx, placed.x, placed.baselineY, lineGuideMetrics(layout, placed));
     ctx.fillStyle = textColor;
     ctx.globalAlpha = 0.2;
-    ctx.fillText(placed.char, placed.x, placed.baselineY);
+    ctx.fillText(placed.char, placed.x, drawY);
     ctx.globalAlpha = 1;
   }
 }

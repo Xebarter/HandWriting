@@ -23,10 +23,13 @@ import {
   visualYToLogicalY,
 } from '@/lib/page-view-layout';
 import { computeDocumentMetrics } from '@/lib/document-metrics';
+import { getParagraphBounds } from '@/lib/paragraph-bounds';
 import { getEditorStoredText, setEditorPlainText } from '@/lib/editor-page-sync';
 import {
   applyEditorCommand,
   clampRange,
+  isPrintableKeyEvent,
+  resolveInsertedCharacter,
   normalizeEditorText,
   rangeBounds,
   rangesEqual,
@@ -44,7 +47,7 @@ import {
   wordLeft,
   wordRight,
 } from '@/lib/editor-navigation';
-import { EditKind, UndoHistory } from '@/lib/undo-history';
+import { EditKind, HistoryEntry, UndoHistory } from '@/lib/undo-history';
 
 type SelectionRect = { left: number; top: number; width: number; height: number };
 
@@ -59,14 +62,6 @@ function getWordBounds(text: string, index: number): { start: number; end: numbe
   return { start, end };
 }
 
-function getParagraphBounds(text: string, index: number): { start: number; end: number } {
-  const clamped = Math.max(0, Math.min(index, text.length));
-  const start = text.lastIndexOf('\n', clamped - 1) + 1;
-  const nextNewline = text.indexOf('\n', clamped);
-  const end = nextNewline === -1 ? text.length : nextNewline;
-  return { start, end };
-}
-
 export interface EditorSelectionOffsets {
   start: number;
   end: number;
@@ -74,7 +69,15 @@ export interface EditorSelectionOffsets {
 
 export interface EditorActions {
   selectAll: () => void;
+  recordHistory: (kind: EditKind) => void;
+  undo: () => void;
+  redo: () => void;
 }
+
+export type DocumentHistoryState = Pick<
+  HistoryEntry,
+  'connections' | 'autoLinkEnabled' | 'textStyleRanges'
+>;
 
 interface DocumentWorkspaceProps {
   text: string;
@@ -100,10 +103,13 @@ interface DocumentWorkspaceProps {
   onLetterLayoutChange?: (layout: LetterBox[], fontMetrics: RuledFontMetrics) => void;
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
+  getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
   onActivePageChange?: (activePage: number, pageCount: number) => void;
   onDocumentMetricsChange?: (metrics: { pageCount: number; renderedPageHeight: number }) => void;
   onSelectionChange?: (selection: EditorSelectionOffsets) => void;
   registerEditorActions?: (actions: EditorActions) => void;
+  getDocumentHistoryState?: () => DocumentHistoryState;
+  onHistoryApply?: (entry: HistoryEntry) => void;
 }
 
 export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
@@ -130,10 +136,13 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   onLetterLayoutChange,
   getCharMode,
   getCharFontSize,
+  getCharAlign,
   onActivePageChange,
   onDocumentMetricsChange,
   onSelectionChange,
   registerEditorActions,
+  getDocumentHistoryState,
+  onHistoryApply,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
   const [isClient, setIsClient] = useState(false);
@@ -152,6 +161,9 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   const selectionRef = useRef(selection);
   const lastEditKeyRef = useRef<{ key: string; time: number } | null>(null);
   const lastReportedSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const keydownHandledInputRef = useRef(false);
+  const lastPhysicalKeyRef = useRef<{ code: string; shiftKey: boolean } | null>(null);
+  const pendingPrintableInsertRef = useRef<string | null>(null);
 
   textRef.current = text;
   selectionRef.current = selection;
@@ -183,6 +195,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       fontMetrics,
       getCharMode,
       getCharFontSize,
+      getCharAlign,
     }),
     [
       text,
@@ -196,6 +209,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       fontMetrics,
       getCharMode,
       getCharFontSize,
+      getCharAlign,
     ]
   );
 
@@ -258,16 +272,6 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     onSelectionChangeRef.current?.({ start, end });
   }, [selection]);
 
-  useEffect(() => {
-    registerEditorActions?.({
-      selectAll: () => {
-        historyRef.current.breakCoalescing();
-        preferredXRef.current = null;
-        setSelection({ anchor: 0, focus: text.length });
-      },
-    });
-  }, [registerEditorActions, text.length]);
-
   // External text changes (open document, toolbar transforms): clamp the
   // selection and reset the undo history so Ctrl+Z can't cross documents.
   useEffect(() => {
@@ -275,7 +279,10 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     lastCommittedTextRef.current = text;
     historyRef.current = new UndoHistory();
     preferredXRef.current = null;
-    setSelection((current) => clampRange(current, text.length));
+    setSelection((current) => {
+      const next = clampRange(current, text.length);
+      return rangesEqual(current, next) ? current : next;
+    });
   }, [text]);
 
   // Mirror the text into the capture element (it never owns the content).
@@ -468,23 +475,41 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     return true;
   }, []);
 
+  const captureHistoryEntry = useCallback((): HistoryEntry => {
+    const documentState = getDocumentHistoryState?.() ?? {
+      connections: connections.map((connection) => ({
+        ...connection,
+        points: connection.points.map((point) => ({ ...point })),
+      })),
+      autoLinkEnabled: false,
+      textStyleRanges: [],
+    };
+
+    return {
+      text: textRef.current,
+      selection: selectionRef.current,
+      connections: documentState.connections,
+      autoLinkEnabled: documentState.autoLinkEnabled,
+      textStyleRanges: documentState.textStyleRanges,
+    };
+  }, [connections, getDocumentHistoryState]);
+
   const commitEdit = useCallback(
     (result: { text: string; range: TextRange }, kind: EditKind) => {
-      const currentText = textRef.current;
-      const currentSelection = selectionRef.current;
+      const currentEntry = captureHistoryEntry();
       const nextText = normalizeEditorText(result.text);
       const nextRange = clampRange(result.range, nextText.length);
 
-      historyRef.current.record({ text: currentText, selection: currentSelection }, kind);
+      historyRef.current.record(currentEntry, kind);
       lastCommittedTextRef.current = nextText;
       autoScrollRef.current = true;
       preferredXRef.current = null;
       setSelection((current) => (rangesEqual(current, nextRange) ? current : nextRange));
-      if (nextText !== currentText) {
+      if (nextText !== currentEntry.text) {
         onTextChange(nextText);
       }
     },
-    [onTextChange]
+    [captureHistoryEntry, onTextChange]
   );
 
   const runCommand = useCallback(
@@ -516,31 +541,57 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     []
   );
 
+  const restoreHistoryEntry = useCallback(
+    (entry: HistoryEntry) => {
+      lastCommittedTextRef.current = entry.text;
+      autoScrollRef.current = true;
+      preferredXRef.current = null;
+      const nextRange = clampRange(entry.selection, entry.text.length);
+      setSelection((current) => (rangesEqual(current, nextRange) ? current : nextRange));
+
+      if (onHistoryApply) {
+        onHistoryApply(entry);
+        return;
+      }
+
+      if (entry.text !== textRef.current) {
+        onTextChange(entry.text);
+      }
+    },
+    [onHistoryApply, onTextChange]
+  );
+
   const doUndo = useCallback(() => {
-    const entry = historyRef.current.undo({ text: textRef.current, selection: selectionRef.current });
+    const entry = historyRef.current.undo(captureHistoryEntry());
     if (!entry) return;
-    lastCommittedTextRef.current = entry.text;
-    autoScrollRef.current = true;
-    preferredXRef.current = null;
-    const nextRange = clampRange(entry.selection, entry.text.length);
-    setSelection((current) => (rangesEqual(current, nextRange) ? current : nextRange));
-    if (entry.text !== textRef.current) {
-      onTextChange(entry.text);
-    }
-  }, [onTextChange]);
+    restoreHistoryEntry(entry);
+  }, [captureHistoryEntry, restoreHistoryEntry]);
 
   const doRedo = useCallback(() => {
-    const entry = historyRef.current.redo({ text: textRef.current, selection: selectionRef.current });
+    const entry = historyRef.current.redo(captureHistoryEntry());
     if (!entry) return;
-    lastCommittedTextRef.current = entry.text;
-    autoScrollRef.current = true;
-    preferredXRef.current = null;
-    const nextRange = clampRange(entry.selection, entry.text.length);
-    setSelection((current) => (rangesEqual(current, nextRange) ? current : nextRange));
-    if (entry.text !== textRef.current) {
-      onTextChange(entry.text);
-    }
-  }, [onTextChange]);
+    restoreHistoryEntry(entry);
+  }, [captureHistoryEntry, restoreHistoryEntry]);
+
+  const recordHistory = useCallback(
+    (kind: EditKind) => {
+      historyRef.current.record(captureHistoryEntry(), kind);
+    },
+    [captureHistoryEntry]
+  );
+
+  useEffect(() => {
+    registerEditorActions?.({
+      selectAll: () => {
+        historyRef.current.breakCoalescing();
+        preferredXRef.current = null;
+        setSelection({ anchor: 0, focus: text.length });
+      },
+      recordHistory,
+      undo: doUndo,
+      redo: doRedo,
+    });
+  }, [doRedo, doUndo, recordHistory, registerEditorActions, text.length]);
 
   // ------------------------------------------------------------------
   // Keyboard input.
@@ -578,12 +629,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
       if (key === 'Enter') {
         event.preventDefault();
+        keydownHandledInputRef.current = true;
         runCommand({ type: 'insertParagraph' }, 'paragraph');
         return;
       }
 
       if (key === 'Backspace') {
         event.preventDefault();
+        keydownHandledInputRef.current = true;
         if (ctrl && collapsed) {
           const boundary = wordLeft(text, selection.focus);
           if (boundary !== selection.focus) {
@@ -600,6 +653,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
       if (key === 'Delete') {
         event.preventDefault();
+        keydownHandledInputRef.current = true;
         if (ctrl && collapsed) {
           const boundary = wordRight(text, selection.focus);
           if (boundary !== selection.focus) {
@@ -654,9 +708,13 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
         historyRef.current.breakCoalescing();
         autoScrollRef.current = true;
-        setSelection(
-          clampRange({ anchor: shift ? selection.anchor : offset, focus: offset }, text.length)
-        );
+        setSelection((current) => {
+          const next = clampRange(
+            { anchor: shift ? selection.anchor : offset, focus: offset },
+            text.length
+          );
+          return rangesEqual(current, next) ? current : next;
+        });
         preferredXRef.current = stickyX;
         return;
       }
@@ -681,11 +739,13 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         return;
       }
 
-      // Printable characters: handle directly (Google Docs model). AltGr
-      // combos report ctrl+alt and fall through to the beforeinput path.
-      if (key.length === 1 && !ctrl && !event.altKey) {
+      // Printable characters: block the DOM edit and let beforeinput insert
+      // using the physical key code (event.key is unreliable for / vs \).
+      if (isPrintableKeyEvent(event)) {
+        const physical = { code: event.code, shiftKey: event.shiftKey };
+        lastPhysicalKeyRef.current = physical;
+        pendingPrintableInsertRef.current = resolveInsertedCharacter(physical, key);
         event.preventDefault();
-        runCommand({ type: 'insertText', text: key }, 'typing');
       }
     },
     [doRedo, doUndo, moveSelection, runCommand, selection, text, worksheetLayout]
@@ -705,12 +765,32 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       // Controlled editor: the DOM is never mutated directly.
       native.preventDefault();
 
+      if (keydownHandledInputRef.current) {
+        keydownHandledInputRef.current = false;
+        lastPhysicalKeyRef.current = null;
+        pendingPrintableInsertRef.current = null;
+        return;
+      }
+
       switch (inputType) {
         case 'insertText':
         case 'insertReplacementText': {
           const data =
             native.data ?? native.dataTransfer?.getData('text/plain') ?? '';
-          if (data) runCommand({ type: 'insertText', text: data }, 'typing');
+          const physical = lastPhysicalKeyRef.current;
+          lastPhysicalKeyRef.current = null;
+          const text = resolveInsertedCharacter(
+            physical,
+            data || pendingPrintableInsertRef.current || ''
+          );
+          if (!text) {
+            pendingPrintableInsertRef.current = null;
+            break;
+          }
+          const editKey = `typing:${text}:${selectionRef.current.focus}`;
+          if (!shouldAcceptEdit(editKey)) break;
+          pendingPrintableInsertRef.current = null;
+          runCommand({ type: 'insertText', text }, 'typing');
           break;
         }
         case 'insertParagraph':
@@ -982,20 +1062,32 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       if (event.detail >= 3) {
         const { start, end } = getParagraphBounds(text, offset);
         pointerDragRef.current = null;
-        setSelection({ anchor: start, focus: end });
+        setSelection((current) =>
+          rangesEqual(current, { anchor: start, focus: end })
+            ? current
+            : { anchor: start, focus: end }
+        );
         return;
       }
 
       if (event.detail === 2) {
         const { start, end } = getWordBounds(text, offset);
         pointerDragRef.current = null;
-        setSelection({ anchor: start, focus: end });
+        setSelection((current) =>
+          rangesEqual(current, { anchor: start, focus: end })
+            ? current
+            : { anchor: start, focus: end }
+        );
         return;
       }
 
       const anchor = event.shiftKey ? selection.anchor : offset;
       pointerDragRef.current = { anchor };
-      setSelection({ anchor, focus: offset });
+      setSelection((current) =>
+        rangesEqual(current, { anchor, focus: offset })
+          ? current
+          : { anchor, focus: offset }
+      );
     },
     [connectMode, editorRef, getSelectionOffsetFromPoint, selection.anchor, text]
   );
@@ -1010,7 +1102,10 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       const focusOffset = getSelectionOffsetFromPoint(event.clientX, event.clientY);
       if (focusOffset === null) return;
 
-      setSelection({ anchor: drag.anchor, focus: focusOffset });
+      setSelection((current) => {
+        const next = { anchor: drag.anchor, focus: focusOffset };
+        return rangesEqual(current, next) ? current : next;
+      });
     },
     [connectMode, getSelectionOffsetFromPoint]
   );
@@ -1019,17 +1114,34 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     pointerDragRef.current = null;
   }, []);
 
+  const handleDocumentKeyUp = useCallback(() => {
+    const pending = pendingPrintableInsertRef.current;
+    if (pending) {
+      pendingPrintableInsertRef.current = null;
+      lastPhysicalKeyRef.current = null;
+      const editKey = `typing:${pending}:${selectionRef.current.focus}`;
+      if (shouldAcceptEdit(editKey)) {
+        runCommand({ type: 'insertText', text: pending }, 'typing');
+      }
+      return;
+    }
+    keydownHandledInputRef.current = false;
+    lastPhysicalKeyRef.current = null;
+  }, [runCommand, shouldAcceptEdit]);
+
   useEffect(() => {
     if (!isClient) return;
 
     document.addEventListener('mousemove', handleDocumentMouseMove);
     document.addEventListener('mouseup', handleDocumentMouseUp);
+    document.addEventListener('keyup', handleDocumentKeyUp);
 
     return () => {
       document.removeEventListener('mousemove', handleDocumentMouseMove);
       document.removeEventListener('mouseup', handleDocumentMouseUp);
+      document.removeEventListener('keyup', handleDocumentKeyUp);
     };
-  }, [handleDocumentMouseMove, handleDocumentMouseUp, isClient]);
+  }, [handleDocumentKeyUp, handleDocumentMouseMove, handleDocumentMouseUp, isClient]);
 
   const handlePageWheel = useCallback((event: React.WheelEvent<HTMLElement>) => {
     if (event.ctrlKey) return;
@@ -1100,6 +1212,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     connections,
     getCharMode,
     getCharFontSize,
+    getCharAlign,
     bare: true as const,
   };
 
