@@ -1,5 +1,6 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
+import { SupabaseSessionKeepAlive } from '@/components/SupabaseSessionKeepAlive'
 import './globals.css'
 
 // Prevent Next.js from statically caching auth-bound responses across users.
@@ -38,6 +39,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
+        <SupabaseSessionKeepAlive />
         {children}
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

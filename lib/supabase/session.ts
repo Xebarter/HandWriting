@@ -15,11 +15,30 @@ function formatSessionError(message: string): string {
   return `Authentication error: ${message}`;
 }
 
+function isMissingSessionError(error: { name?: string; message?: string } | null): boolean {
+  if (!error) return false;
+
+  const message = error.message?.toLowerCase() ?? '';
+  return (
+    error.name === 'AuthSessionMissingError' ||
+    message.includes('auth session missing') ||
+    message.includes('session not found')
+  );
+}
+
 /**
- * Returns the current authenticated user.
+ * Returns the current authenticated user, refreshing the session when possible.
  */
 export async function ensureSupabaseSession(): Promise<User> {
   const supabase = createClient();
+
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  if (session?.user) {
+    return session.user;
+  }
 
   const {
     data: { user },
@@ -30,8 +49,21 @@ export async function ensureSupabaseSession(): Promise<User> {
     return user;
   }
 
-  if (userError && userError.name !== 'AuthSessionMissingError') {
+  const {
+    data: { session: refreshedSession },
+    error: refreshError,
+  } = await supabase.auth.refreshSession();
+
+  if (refreshedSession?.user) {
+    return refreshedSession.user;
+  }
+
+  if (userError && !isMissingSessionError(userError)) {
     throw new Error(formatSessionError(userError.message));
+  }
+
+  if (refreshError && !isMissingSessionError(refreshError)) {
+    throw new Error(formatSessionError(refreshError.message));
   }
 
   throw new Error('Please sign in to continue.');

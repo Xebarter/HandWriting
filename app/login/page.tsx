@@ -63,6 +63,7 @@ export default function LoginPage() {
       });
 
       if (!signInError) {
+        await supabase.auth.getSession();
         completeSignIn();
         return;
       }
@@ -86,6 +87,7 @@ export default function LoginPage() {
       }
 
       if (data.session) {
+        await supabase.auth.getSession();
         completeSignIn();
         return;
       }
@@ -96,6 +98,7 @@ export default function LoginPage() {
       });
 
       if (!retrySignInError) {
+        await supabase.auth.getSession();
         completeSignIn();
         return;
       }

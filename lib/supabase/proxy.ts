@@ -41,6 +41,7 @@ export async function updateSession(request: NextRequest) {
   // with the Supabase client, your users may be randomly logged out.
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser()
 
   const isApiRoute = pathname.startsWith('/api')
@@ -50,8 +51,14 @@ export async function updateSession(request: NextRequest) {
     pathname === '/favicon.ico' ||
     /\.(?:svg|png|jpg|jpeg|gif|webp|ico)$/i.test(pathname)
 
+  const sessionDefinitelyMissing =
+    !user &&
+    (!authError ||
+      authError.name === 'AuthSessionMissingError' ||
+      authError.message?.toLowerCase().includes('auth session missing'))
+
   if (!isApiRoute && !isPublicAsset) {
-    if (!user && !isLoginPage) {
+    if (sessionDefinitelyMissing && !isLoginPage) {
       const url = request.nextUrl.clone()
       url.pathname = '/login'
       url.searchParams.set('next', pathname)
