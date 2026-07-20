@@ -155,8 +155,11 @@ export interface TextStyleRange {
   end: number;
   mode?: HandwritingMode;
   linksEnabled?: boolean;
+  /** Pull adjacent letters together so their ink touches (no connector strokes). */
+  lettersTouching?: boolean;
   fontSize?: number;
   textAlign?: 'left' | 'center' | 'right';
+  textColor?: string;
 }
 
 export interface LetterBox {

@@ -37,6 +37,9 @@ import {
 } from '@/lib/editor-input';
 import {
   caretPositionFromLayout,
+  closestOffsetOnLine,
+  lineForLocalPageY,
+  lineSpacingForIndex,
   measureWorksheetLayout,
   WorksheetTextLayout,
 } from '@/lib/text-line-layout';
@@ -104,12 +107,15 @@ interface DocumentWorkspaceProps {
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
   getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
+  getCharColor?: (charIndex: number) => string;
+  getCharLettersTouching?: (charIndex: number) => boolean;
   onActivePageChange?: (activePage: number, pageCount: number) => void;
   onDocumentMetricsChange?: (metrics: { pageCount: number; renderedPageHeight: number }) => void;
   onSelectionChange?: (selection: EditorSelectionOffsets) => void;
   registerEditorActions?: (actions: EditorActions) => void;
   getDocumentHistoryState?: () => DocumentHistoryState;
   onHistoryApply?: (entry: HistoryEntry) => void;
+  onHistoryStateChange?: (state: { canUndo: boolean; canRedo: boolean }) => void;
 }
 
 export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
@@ -137,17 +143,21 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   getCharMode,
   getCharFontSize,
   getCharAlign,
+  getCharColor,
+  getCharLettersTouching,
   onActivePageChange,
   onDocumentMetricsChange,
   onSelectionChange,
   registerEditorActions,
   getDocumentHistoryState,
   onHistoryApply,
+  onHistoryStateChange,
 }) => {
   const [isFocused, setIsFocused] = useState(false);
   const [isClient, setIsClient] = useState(false);
   const [selection, setSelection] = useState<TextRange>({ anchor: 0, focus: 0 });
   const [activePage, setActivePage] = useState(1);
+  const [draftText, setDraftText] = useState(text);
 
   const pageStackRef = useRef<HTMLDivElement>(null);
   const pageSurfaceRef = useRef<HTMLDivElement>(null);
@@ -165,7 +175,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   const lastPhysicalKeyRef = useRef<{ code: string; shiftKey: boolean } | null>(null);
   const pendingPrintableInsertRef = useRef<string | null>(null);
 
-  textRef.current = text;
+  textRef.current = draftText;
   selectionRef.current = selection;
 
   const ssrFontMetrics = useMemo(
@@ -181,7 +191,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
   const layoutOptions = useMemo(
     () => ({
-      text,
+      text: draftText,
       mode,
       fontSize,
       dotSpacing,
@@ -196,9 +206,11 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       getCharMode,
       getCharFontSize,
       getCharAlign,
+      getCharColor,
+      getCharLettersTouching,
     }),
     [
-      text,
+      draftText,
       mode,
       fontSize,
       dotSpacing,
@@ -210,6 +222,8 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       getCharMode,
       getCharFontSize,
       getCharAlign,
+      getCharColor,
+      getCharLettersTouching,
     ]
   );
 
@@ -223,10 +237,10 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     [isClient, layoutOptions]
   );
 
-  const isEmpty = !text.trim();
+  const isEmpty = !draftText.trim();
   const documentMetrics = useMemo(
-    () => computeDocumentMetrics(text, fontSize, letterLayout),
-    [fontSize, letterLayout, text]
+    () => computeDocumentMetrics(draftText, fontSize, letterLayout),
+    [fontSize, letterLayout, draftText]
   );
   const { pageCount, renderedPageHeight } = documentMetrics;
 
@@ -272,28 +286,40 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     onSelectionChangeRef.current?.({ start, end });
   }, [selection]);
 
+  const onHistoryStateChangeRef = useRef(onHistoryStateChange);
+  onHistoryStateChangeRef.current = onHistoryStateChange;
+
+  const notifyHistoryState = useCallback(() => {
+    onHistoryStateChangeRef.current?.({
+      canUndo: historyRef.current.canUndo,
+      canRedo: historyRef.current.canRedo,
+    });
+  }, []);
+
   // External text changes (open document, toolbar transforms): clamp the
   // selection and reset the undo history so Ctrl+Z can't cross documents.
   useEffect(() => {
     if (text === lastCommittedTextRef.current) return;
     lastCommittedTextRef.current = text;
+    setDraftText(text);
     historyRef.current = new UndoHistory();
     preferredXRef.current = null;
+    notifyHistoryState();
     setSelection((current) => {
       const next = clampRange(current, text.length);
       return rangesEqual(current, next) ? current : next;
     });
-  }, [text]);
+  }, [notifyHistoryState, text]);
 
   // Mirror the text into the capture element (it never owns the content).
   useEffect(() => {
     if (!isClient || isComposingRef.current) return;
     const editor = editorRef.current;
     if (!editor) return;
-    if (getEditorStoredText(editor) !== text) {
-      setEditorPlainText(editor, text);
+    if (getEditorStoredText(editor) !== draftText) {
+      setEditorPlainText(editor, draftText);
     }
-  }, [editorRef, isClient, text]);
+  }, [draftText, editorRef, isClient]);
 
   // Keep a collapsed DOM caret near the logical caret so IME popups appear
   // in the right place. The DOM selection is never read back.
@@ -334,7 +360,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     } catch {
       // Ignore: DOM caret is cosmetic only.
     }
-  }, [editorRef, isClient, isFocused, selection.focus, text]);
+  }, [draftText, editorRef, isClient, isFocused, selection.focus]);
 
   // ------------------------------------------------------------------
   // Caret + selection visuals, derived from the layout engine.
@@ -344,7 +370,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     if (!isClient || !isFocused || connectMode || !worksheetLayout) return null;
     if (selection.anchor !== selection.focus) return null;
 
-    const offset = Math.max(0, Math.min(selection.focus, text.length));
+    const offset = Math.max(0, Math.min(selection.focus, draftText.length));
     const position = caretPositionFromLayout(worksheetLayout, offset);
     const atChar = worksheetLayout.chars.find((char) => char.charIndex === offset);
     const prevChar = [...worksheetLayout.chars]
@@ -365,36 +391,36 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     isClient,
     isFocused,
     selection,
-    text.length,
+    draftText,
     worksheetLayout,
   ]);
 
   const selectionRects = useMemo((): SelectionRect[] => {
-    if (!isClient || selection.anchor === selection.focus) return [];
+    if (!isClient || selection.anchor === selection.focus || !worksheetLayout) return [];
 
     const { start, end } = rangeBounds(selection);
-    const selected = letterLayout
-      .filter((box) => box.charIndex >= start && box.charIndex < end)
+    const selected = worksheetLayout.chars
+      .filter((char) => char.charIndex >= start && char.charIndex < end)
       .sort((a, b) => a.charIndex - b.charIndex);
 
     if (selected.length === 0) return [];
 
-    const lines = new Map<string, LetterBox[]>();
-    for (const box of selected) {
-      const key = `${box.pageIndex ?? 0}:${box.lineIndex}`;
+    const lines = new Map<string, typeof selected>();
+    for (const char of selected) {
+      const key = `${char.pageIndex ?? 0}:${char.lineIndex}`;
       const existing = lines.get(key);
       if (existing) {
-        existing.push(box);
+        existing.push(char);
       } else {
-        lines.set(key, [box]);
+        lines.set(key, [char]);
       }
     }
 
     return [...lines.values()].map((line) => {
       const first = line[0];
       const last = line[line.length - 1];
-      const lineCapAscent = Math.max(...line.map((box) => box.ascent));
-      const lineRenderSize = Math.max(...line.map((box) => box.ascent + box.descent));
+      const lineCapAscent = Math.max(...line.map((char) => char.capAscent));
+      const lineRenderSize = Math.max(...line.map((char) => char.renderSize));
       return {
         left: first.x,
         top: first.baselineY - lineCapAscent,
@@ -402,11 +428,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         height: Math.max(lineRenderSize, lineCapAscent),
       };
     });
-  }, [
-    isClient,
-    letterLayout,
-    selection,
-  ]);
+  }, [isClient, worksheetLayout, selection]);
 
   const scrollCaretIntoView = useCallback(
     (rect: { left: number; top: number; height: number }) => {
@@ -433,7 +455,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   useEffect(() => {
     if (!isClient || !worksheetLayout) return;
 
-    const offset = Math.max(0, Math.min(selection.focus, text.length));
+    const offset = Math.max(0, Math.min(selection.focus, draftText.length));
     const position = caretPositionFromLayout(worksheetLayout, offset);
     const page = getPageIndexFromLogicalY(position.baselineY) + 1;
     setActivePage((current) => (current === page ? current : page));
@@ -457,7 +479,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     isClient,
     scrollCaretIntoView,
     selection,
-    text.length,
+    draftText.length,
     worksheetLayout,
   ]);
 
@@ -502,14 +524,16 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
       historyRef.current.record(currentEntry, kind);
       lastCommittedTextRef.current = nextText;
+      setDraftText(nextText);
       autoScrollRef.current = true;
       preferredXRef.current = null;
+      notifyHistoryState();
       setSelection((current) => (rangesEqual(current, nextRange) ? current : nextRange));
       if (nextText !== currentEntry.text) {
         onTextChange(nextText);
       }
     },
-    [captureHistoryEntry, onTextChange]
+    [captureHistoryEntry, notifyHistoryState, onTextChange]
   );
 
   const runCommand = useCallback(
@@ -544,6 +568,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   const restoreHistoryEntry = useCallback(
     (entry: HistoryEntry) => {
       lastCommittedTextRef.current = entry.text;
+      setDraftText(entry.text);
       autoScrollRef.current = true;
       preferredXRef.current = null;
       const nextRange = clampRange(entry.selection, entry.text.length);
@@ -565,19 +590,22 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     const entry = historyRef.current.undo(captureHistoryEntry());
     if (!entry) return;
     restoreHistoryEntry(entry);
-  }, [captureHistoryEntry, restoreHistoryEntry]);
+    notifyHistoryState();
+  }, [captureHistoryEntry, notifyHistoryState, restoreHistoryEntry]);
 
   const doRedo = useCallback(() => {
     const entry = historyRef.current.redo(captureHistoryEntry());
     if (!entry) return;
     restoreHistoryEntry(entry);
-  }, [captureHistoryEntry, restoreHistoryEntry]);
+    notifyHistoryState();
+  }, [captureHistoryEntry, notifyHistoryState, restoreHistoryEntry]);
 
   const recordHistory = useCallback(
     (kind: EditKind) => {
       historyRef.current.record(captureHistoryEntry(), kind);
+      notifyHistoryState();
     },
-    [captureHistoryEntry]
+    [captureHistoryEntry, notifyHistoryState]
   );
 
   useEffect(() => {
@@ -585,13 +613,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       selectAll: () => {
         historyRef.current.breakCoalescing();
         preferredXRef.current = null;
-        setSelection({ anchor: 0, focus: text.length });
+        setSelection({ anchor: 0, focus: draftText.length });
       },
       recordHistory,
       undo: doUndo,
       redo: doRedo,
     });
-  }, [doRedo, doUndo, recordHistory, registerEditorActions, text.length]);
+    notifyHistoryState();
+  }, [doRedo, doUndo, notifyHistoryState, recordHistory, registerEditorActions, draftText.length]);
 
   // ------------------------------------------------------------------
   // Keyboard input.
@@ -607,24 +636,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       const lower = key.toLowerCase();
       const collapsed = selection.anchor === selection.focus;
 
-      if (ctrl && !shift && lower === 'z') {
-        event.preventDefault();
-        doUndo();
-        return;
-      }
-      if (ctrl && (lower === 'y' || (shift && lower === 'z'))) {
-        event.preventDefault();
-        doRedo();
-        return;
-      }
       if (ctrl && lower === 'a') {
         event.preventDefault();
         historyRef.current.breakCoalescing();
         preferredXRef.current = null;
-        setSelection({ anchor: 0, focus: text.length });
+        setSelection({ anchor: 0, focus: draftText.length });
         return;
       }
-      // Native clipboard events and app-level shortcuts (save, print).
+      // Native clipboard events and app-level shortcuts (save, print, undo, redo).
       if (ctrl && ['c', 'x', 'v', 's', 'p'].includes(lower)) return;
 
       if (key === 'Enter') {
@@ -638,7 +657,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         event.preventDefault();
         keydownHandledInputRef.current = true;
         if (ctrl && collapsed) {
-          const boundary = wordLeft(text, selection.focus);
+          const boundary = wordLeft(draftText, selection.focus);
           if (boundary !== selection.focus) {
             runCommand({ type: 'deleteBackward' }, 'other', {
               anchor: boundary,
@@ -655,7 +674,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         event.preventDefault();
         keydownHandledInputRef.current = true;
         if (ctrl && collapsed) {
-          const boundary = wordRight(text, selection.focus);
+          const boundary = wordRight(draftText, selection.focus);
           if (boundary !== selection.focus) {
             runCommand({ type: 'deleteForward' }, 'other', {
               anchor: selection.focus,
@@ -675,7 +694,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
         if (ctrl) {
           target =
-            direction < 0 ? wordLeft(text, selection.focus) : wordRight(text, selection.focus);
+            direction < 0 ? wordLeft(draftText, selection.focus) : wordRight(draftText, selection.focus);
         } else if (!shift && !collapsed) {
           const { start, end } = rangeBounds(selection);
           target = direction < 0 ? start : end;
@@ -700,7 +719,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
         const { offset, stickyX } = moveVertical(
           worksheetLayout,
-          text.length,
+          draftText.length,
           from,
           direction,
           preferredXRef.current
@@ -711,7 +730,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         setSelection((current) => {
           const next = clampRange(
             { anchor: shift ? selection.anchor : offset, focus: offset },
-            text.length
+            draftText.length
           );
           return rangesEqual(current, next) ? current : next;
         });
@@ -723,7 +742,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         event.preventDefault();
         let target: number;
         if (ctrl || !worksheetLayout) {
-          target = key === 'Home' ? 0 : text.length;
+          target = key === 'Home' ? 0 : draftText.length;
         } else {
           target =
             key === 'Home'
@@ -739,16 +758,24 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         return;
       }
 
-      // Printable characters: block the DOM edit and let beforeinput insert
-      // using the physical key code (event.key is unreliable for / vs \).
+      // Printable characters: insert immediately on keydown for instant canvas paint.
       if (isPrintableKeyEvent(event)) {
         const physical = { code: event.code, shiftKey: event.shiftKey };
+        const inserted = resolveInsertedCharacter(physical, key);
         lastPhysicalKeyRef.current = physical;
-        pendingPrintableInsertRef.current = resolveInsertedCharacter(physical, key);
+        pendingPrintableInsertRef.current = inserted;
         event.preventDefault();
+        if (inserted) {
+          keydownHandledInputRef.current = true;
+          const editKey = `typing:${inserted}:${selectionRef.current.focus}`;
+          if (shouldAcceptEdit(editKey)) {
+            pendingPrintableInsertRef.current = null;
+            runCommand({ type: 'insertText', text: inserted }, 'typing');
+          }
+        }
       }
     },
-    [doRedo, doUndo, moveSelection, runCommand, selection, text, worksheetLayout]
+    [draftText, moveSelection, runCommand, selection, shouldAcceptEdit, worksheetLayout]
   );
 
   // Native beforeinput listener: React's synthetic onBeforeInput is a
@@ -818,17 +845,11 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
           }
           break;
         }
-        case 'historyUndo':
-          doUndo();
-          break;
-        case 'historyRedo':
-          doRedo();
-          break;
         default:
           break;
       }
     },
-    [doRedo, doUndo, runCommand, shouldAcceptEdit]
+    [runCommand, shouldAcceptEdit]
   );
 
   useEffect(() => {
@@ -845,11 +866,11 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     (event: React.FormEvent<HTMLDivElement>) => {
       if (isComposingRef.current) return;
       const editor = event.currentTarget;
-      if (getEditorStoredText(editor) !== text) {
-        setEditorPlainText(editor, text);
+      if (getEditorStoredText(editor) !== draftText) {
+        setEditorPlainText(editor, draftText);
       }
     },
-    [text]
+    [draftText]
   );
 
   const handleCompositionStart = useCallback(() => {
@@ -864,14 +885,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       // The browser inserted the composed text into the DOM directly;
       // restore the mirror, then apply the edit through the command path.
       const editor = editorRef.current;
-      if (editor && getEditorStoredText(editor) !== text) {
-        setEditorPlainText(editor, text);
+      if (editor && getEditorStoredText(editor) !== draftText) {
+        setEditorPlainText(editor, draftText);
       }
       if (data) {
         runCommand({ type: 'insertText', text: data }, 'typing');
       }
     },
-    [editorRef, runCommand, text]
+    [draftText, editorRef, runCommand]
   );
 
   // ------------------------------------------------------------------
@@ -880,8 +901,8 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
 
   const getSelectedText = useCallback(() => {
     const { start, end } = rangeBounds(selection);
-    return text.slice(start, end);
-  }, [selection, text]);
+    return draftText.slice(start, end);
+  }, [draftText, selection]);
 
   const handleCopy = useCallback(
     (event: React.ClipboardEvent<HTMLDivElement>) => {
@@ -926,12 +947,13 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   const getSelectionOffsetFromPoint = useCallback(
     (clientX: number, clientY: number) => {
       const pageStack = pageStackRef.current;
-      if (!pageStack) return null;
-      if (letterLayout.length === 0) return 0;
+      const pageSurface = pageSurfaceRef.current;
+      if (!pageStack || !worksheetLayout) return null;
 
       const stackRect = pageStack.getBoundingClientRect();
-      const visualX = clientX - stackRect.left;
-      const visualY = clientY - stackRect.top;
+      const surfaceRect = pageSurface?.getBoundingClientRect() ?? stackRect;
+      const visualX = clientX - surfaceRect.left;
+      const visualY = clientY - surfaceRect.top;
       const x = visualX / zoom;
       const y = visualYToLogicalY(visualY, zoom, pageCount);
 
@@ -944,106 +966,83 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       );
       const localPageY = y - clickedPageIndex * PAGE_HEIGHT;
 
-      const lines = new Map<string, LetterBox[]>();
-      for (const box of letterLayout) {
-        const key = `${box.pageIndex ?? 0}:${box.lineIndex}`;
-        const existing = lines.get(key);
-        if (existing) {
-          existing.push(box);
-        } else {
-          lines.set(key, [box]);
-        }
-      }
+      const layoutLinesOnPage = worksheetLayout.lines
+        .filter((line) => line.pageIndex === clickedPageIndex)
+        .sort((a, b) => a.baselineY - b.baselineY);
 
-      const orderedLines = [...lines.values()]
-        .map((line) => [...line].sort((a, b) => a.charIndex - b.charIndex))
-        .sort((a, b) => {
-          const aLocalBaseline = a[0].baselineY - (a[0].pageIndex ?? 0) * PAGE_HEIGHT;
-          const bLocalBaseline = b[0].baselineY - (b[0].pageIndex ?? 0) * PAGE_HEIGHT;
-          if ((a[0].pageIndex ?? 0) !== (b[0].pageIndex ?? 0)) {
-            return (a[0].pageIndex ?? 0) - (b[0].pageIndex ?? 0);
-          }
-          return aLocalBaseline - bLocalBaseline;
-        });
-
-      const pageLines = orderedLines.filter(
-        (line) => (line[0]?.pageIndex ?? 0) === clickedPageIndex
-      );
-
-      if (pageLines.length === 0) {
-        const lastBoxBeforePage = [...letterLayout]
-          .filter((box) => (box.pageIndex ?? 0) < clickedPageIndex)
+      if (layoutLinesOnPage.length === 0) {
+        const lastCharBeforePage = [...worksheetLayout.chars]
+          .filter((char) => char.pageIndex < clickedPageIndex)
           .sort((a, b) => a.charIndex - b.charIndex)
           .at(-1);
 
-        if (lastBoxBeforePage) {
-          return lastBoxBeforePage.charIndex + 1;
+        if (lastCharBeforePage) {
+          return lastCharBeforePage.charIndex + 1;
         }
 
-        const firstBoxAfterPage = [...letterLayout]
-          .filter((box) => (box.pageIndex ?? 0) > clickedPageIndex)
+        const firstCharAfterPage = [...worksheetLayout.chars]
+          .filter((char) => char.pageIndex > clickedPageIndex)
           .sort((a, b) => a.charIndex - b.charIndex)
           .at(0);
 
-        if (firstBoxAfterPage) {
-          return firstBoxAfterPage.charIndex;
+        if (firstCharAfterPage) {
+          return firstCharAfterPage.charIndex;
         }
 
-        return text.length;
-      }
+        const lastLineBeforePage = [...worksheetLayout.lines]
+          .filter((line) => line.pageIndex < clickedPageIndex)
+          .sort((a, b) => a.lineIndex - b.lineIndex)
+          .at(-1);
 
-      const firstPageLine = pageLines[0];
-      const lastPageLine = pageLines[pageLines.length - 1];
-      const firstPageBaseline =
-        firstPageLine[0].baselineY - (firstPageLine[0].pageIndex ?? 0) * PAGE_HEIGHT;
-      const lastPageBaseline =
-        lastPageLine[0].baselineY - (lastPageLine[0].pageIndex ?? 0) * PAGE_HEIGHT;
-
-      // Header / above first line on this page
-      if (localPageY < firstPageBaseline - fontMetrics.lineHeight / 2) {
-        return firstPageLine[0].charIndex;
-      }
-
-      // Footer past last line: place after last char (start of next page content)
-      if (localPageY > lastPageBaseline + fontMetrics.lineHeight / 2) {
-        return lastPageLine[lastPageLine.length - 1].charIndex + 1;
-      }
-
-      const targetLine = pageLines.reduce<LetterBox[] | null>((closest, line) => {
-        if (line.length === 0) return closest;
-        if (!closest) return line;
-        const lineLocalBaseline =
-          line[0].baselineY - (line[0].pageIndex ?? 0) * PAGE_HEIGHT;
-        const closestLocalBaseline =
-          closest[0].baselineY - (closest[0].pageIndex ?? 0) * PAGE_HEIGHT;
-        const currentDistance = Math.abs(lineLocalBaseline - localPageY);
-        const closestDistance = Math.abs(closestLocalBaseline - localPageY);
-        return currentDistance < closestDistance ? line : closest;
-      }, null);
-
-      if (!targetLine || targetLine.length === 0) {
-        return lastPageLine[lastPageLine.length - 1].charIndex + 1;
-      }
-
-      const firstChar = targetLine[0];
-      if (x <= firstChar.x + firstChar.width / 2) {
-        return firstChar.charIndex;
-      }
-
-      for (let index = 0; index < targetLine.length; index += 1) {
-        const char = targetLine[index];
-        const midpoint = char.x + char.width / 2;
-        if (x <= midpoint) {
-          return char.charIndex;
+        if (lastLineBeforePage) {
+          return lastLineBeforePage.end;
         }
-        if (index === targetLine.length - 1) {
-          return char.charIndex + 1;
+
+        const firstLineAfterPage = [...worksheetLayout.lines]
+          .filter((line) => line.pageIndex > clickedPageIndex)
+          .sort((a, b) => a.lineIndex - b.lineIndex)
+          .at(0);
+
+        if (firstLineAfterPage) {
+          return firstLineAfterPage.start;
         }
+
+        return draftText.length;
       }
 
-      return text.length;
+      const firstPageLine = layoutLinesOnPage[0];
+      const lastPageLine = layoutLinesOnPage[layoutLinesOnPage.length - 1];
+      const firstPageBaseline = firstPageLine.baselineY - clickedPageIndex * PAGE_HEIGHT;
+      const lastPageBaseline = lastPageLine.baselineY - clickedPageIndex * PAGE_HEIGHT;
+      const fallbackCapAscent = worksheetLayout.metrics.capAscent;
+      const firstCapAscent =
+        firstPageLine.capAscent > 0 ? firstPageLine.capAscent : fallbackCapAscent;
+      const lastCapAscent =
+        lastPageLine.capAscent > 0 ? lastPageLine.capAscent : fallbackCapAscent;
+      const lastLineSpacing = lineSpacingForIndex(worksheetLayout, lastPageLine.lineIndex);
+
+      if (localPageY < firstPageBaseline - firstCapAscent) {
+        return firstPageLine.start;
+      }
+
+      if (localPageY > lastPageBaseline + (lastLineSpacing - lastCapAscent)) {
+        return lastPageLine.end;
+      }
+
+      const targetLayoutLine = lineForLocalPageY(
+        layoutLinesOnPage,
+        localPageY,
+        clickedPageIndex,
+        fallbackCapAscent
+      );
+
+      if (!targetLayoutLine.hasText) {
+        return targetLayoutLine.start;
+      }
+
+      return closestOffsetOnLine(worksheetLayout, targetLayoutLine, x);
     },
-    [fontMetrics.lineHeight, letterLayout, pageCount, text.length, zoom]
+    [draftText, pageCount, worksheetLayout, zoom]
   );
 
   const handleEditorMouseDown = useCallback(
@@ -1060,7 +1059,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       preferredXRef.current = null;
 
       if (event.detail >= 3) {
-        const { start, end } = getParagraphBounds(text, offset);
+        const { start, end } = getParagraphBounds(draftText, offset);
         pointerDragRef.current = null;
         setSelection((current) =>
           rangesEqual(current, { anchor: start, focus: end })
@@ -1071,7 +1070,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
       }
 
       if (event.detail === 2) {
-        const { start, end } = getWordBounds(text, offset);
+        const { start, end } = getWordBounds(draftText, offset);
         pointerDragRef.current = null;
         setSelection((current) =>
           rangesEqual(current, { anchor: start, focus: end })
@@ -1089,7 +1088,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
           : { anchor, focus: offset }
       );
     },
-    [connectMode, editorRef, getSelectionOffsetFromPoint, selection.anchor, text]
+    [connectMode, draftText, editorRef, getSelectionOffsetFromPoint, selection.anchor]
   );
 
   const handleDocumentMouseMove = useCallback(
@@ -1196,7 +1195,8 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   }, [isClient, pageCount, scaledPageHeight, zoom]);
 
   const sharedCanvasProps = {
-    text,
+    text: draftText,
+    textLayout: worksheetLayout,
     mode,
     fontSize,
     dotSpacing,
@@ -1213,6 +1213,8 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     getCharMode,
     getCharFontSize,
     getCharAlign,
+    getCharColor,
+    getCharLettersTouching,
     bare: true as const,
   };
 
@@ -1449,11 +1451,9 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
                   key={`caret-${Math.round(caretRect.left * 100)}-${Math.round(caretRect.top * 100)}`}
                   className="word-editor-caret pointer-events-none absolute z-[25]"
                   style={{
-                    left: caretRect.left * zoom,
+                    left: caretRect.left * zoom - 0.5,
                     top: logicalYToVisualY(caretRect.top, zoom),
-                    width: 1,
                     height: caretRect.height * zoom,
-                    backgroundColor: textColor,
                   }}
                   aria-hidden
                 />

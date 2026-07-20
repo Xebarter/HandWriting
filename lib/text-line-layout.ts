@@ -1,5 +1,10 @@
 import { PAGE_HEIGHT, PAGE_MARGIN } from '@/lib/document-constants';
 import { formatCanvasFont, measureRuledFont, RuledFontMetrics } from '@/lib/font-metrics';
+import {
+  GlyphInkExtents,
+  measureGlyphInkExtents,
+  touchingLetterAdvance,
+} from '@/lib/glyph-ink-bounds';
 import { HandwritingMode } from '@/lib/types';
 
 export interface WorksheetTextOptions {
@@ -18,6 +23,9 @@ export interface WorksheetTextOptions {
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
   getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
+  getCharColor?: (charIndex: number) => string;
+  /** When true for adjacent connectable letters, pull them so ink edges meet. */
+  getCharLettersTouching?: (charIndex: number) => boolean;
 }
 
 export interface PlacedChar {
@@ -46,6 +54,14 @@ export interface PlacedLine {
   baselineY: number;
   pageIndex: number;
   lineIndex: number;
+  /** Row height for ruled lines and hit-testing */
+  lineSpacing: number;
+  /** Tallest cap ascent on this line (for ruled-line drawing) */
+  capAscent: number;
+  /** Tallest x-height ascent on this line (for ruled-line drawing) */
+  xAscent: number;
+  /** Whether this line contains characters */
+  hasText: boolean;
 }
 
 export interface WorksheetTextLayout {
@@ -59,6 +75,48 @@ export interface WorksheetTextLayout {
   fontFamily: string;
 }
 
+interface LogicalChar {
+  char: string;
+  charIndex: number;
+  width: number;
+  /** Horizontal step to the next character origin (may be tighter than width when touching). */
+  advance: number;
+  fontSize: number;
+  renderSize: number;
+  capAscent: number;
+  xAscent: number;
+  lineHeight: number;
+}
+
+function isConnectableLetter(char: string): boolean {
+  return /[A-Za-z\u00C0-\u024F]/.test(char);
+}
+
+function shouldTouchLetters(
+  prevChar: string,
+  nextChar: string,
+  prevIndex: number,
+  nextIndex: number,
+  getCharLettersTouching?: (charIndex: number) => boolean
+): boolean {
+  if (!getCharLettersTouching) return false;
+  if (!isConnectableLetter(prevChar) || !isConnectableLetter(nextChar)) return false;
+  return getCharLettersTouching(prevIndex) && getCharLettersTouching(nextIndex);
+}
+
+interface LogicalLine {
+  start: number;
+  end: number;
+  hasText: boolean;
+  contentSpacing: number;
+  capAscent: number;
+  xAscent: number;
+  lineWidth: number;
+  paragraphIndex: number;
+  paragraphAlign: 'left' | 'center' | 'right';
+  lineChars: LogicalChar[];
+}
+
 function wrapParagraph(
   paragraph: string,
   paragraphStart: number,
@@ -66,21 +124,46 @@ function wrapParagraph(
   availableWidth: number,
   fontFamily: string,
   getCharFontSize: (charIndex: number) => number,
-  metricsCache: Map<number, RuledFontMetrics>
+  metricsCache: Map<number, RuledFontMetrics>,
+  getCharLettersTouching?: (charIndex: number) => boolean
 ): string[] {
   const lines: string[] = [];
   let currentLine = '';
   let lineStartOffset = paragraphStart;
 
   const measureSegment = (segment: string, startOffset: number) => {
-    let width = 0;
+    if (segment.length === 0) return 0;
+
+    let originX = 0;
+    let prevBounds: GlyphInkExtents | null = null;
+    let prevRenderSize = 0;
+    let prevChar = '';
+    let prevIndex = -1;
+    let lastWidth = 0;
+
     for (let index = 0; index < segment.length; index += 1) {
       const charIndex = startOffset + index;
-      const metrics = getMetricsForSize(fontFamily, getCharFontSize(charIndex), metricsCache);
-      ctx.font = formatCanvasFont(fontFamily, metrics.renderFontSize);
-      width += ctx.measureText(segment[index]).width;
+      const char = segment[index];
+      const charMetrics = getMetricsForSize(fontFamily, getCharFontSize(charIndex), metricsCache);
+      const renderSize = charMetrics.renderFontSize;
+      const bounds = measureGlyphInkExtents(ctx, char, fontFamily, renderSize);
+
+      if (index > 0 && prevBounds) {
+        if (shouldTouchLetters(prevChar, char, prevIndex, charIndex, getCharLettersTouching)) {
+          originX += touchingLetterAdvance(prevBounds, bounds, prevRenderSize);
+        } else {
+          originX += prevBounds.width;
+        }
+      }
+
+      lastWidth = bounds.width;
+      prevBounds = bounds;
+      prevRenderSize = renderSize;
+      prevChar = char;
+      prevIndex = charIndex;
     }
-    return width;
+
+    return originX + lastWidth;
   };
 
   for (let index = 0; index < paragraph.length; index += 1) {
@@ -170,6 +253,228 @@ function resolveLineBaseline(
   return { baselineY: y, pageIndex: page };
 }
 
+function textRowSpacing(contentSpacing: number, defaultLineHeight: number): number {
+  return Math.max(contentSpacing, defaultLineHeight);
+}
+
+/** Walk back to the nearest line with text and return its row spacing. */
+function inheritedSpacingFrom(
+  logicalLines: LogicalLine[],
+  fromIndex: number,
+  defaultLineHeight: number
+): number {
+  for (let index = fromIndex; index >= 0; index -= 1) {
+    const line = logicalLines[index];
+    if (line.hasText) {
+      return textRowSpacing(line.contentSpacing, defaultLineHeight);
+    }
+  }
+  return defaultLineHeight;
+}
+
+/** Walk back to the nearest line with text and return its ruled metrics. */
+function inheritedMetricsFrom(
+  logicalLines: LogicalLine[],
+  fromIndex: number,
+  defaultMetrics: RuledFontMetrics,
+  defaultLineHeight: number
+): { lineSpacing: number; capAscent: number; xAscent: number } {
+  for (let index = fromIndex; index >= 0; index -= 1) {
+    const line = logicalLines[index];
+    if (line.hasText) {
+      return {
+        lineSpacing: textRowSpacing(line.contentSpacing, defaultLineHeight),
+        capAscent: line.capAscent,
+        xAscent: line.xAscent,
+      };
+    }
+  }
+  return {
+    lineSpacing: defaultLineHeight,
+    capAscent: defaultMetrics.capAscent,
+    xAscent: defaultMetrics.xAscent,
+  };
+}
+
+function gapToLine(
+  logicalLines: LogicalLine[],
+  lineIndex: number,
+  defaultLineHeight: number
+): number {
+  const logical = logicalLines[lineIndex];
+  if (logical.hasText) {
+    return textRowSpacing(logical.contentSpacing, defaultLineHeight);
+  }
+  return inheritedSpacingFrom(logicalLines, lineIndex - 1, defaultLineHeight);
+}
+
+function rowMetricsForLine(
+  logicalLines: LogicalLine[],
+  lineIndex: number,
+  defaultMetrics: RuledFontMetrics,
+  defaultLineHeight: number
+): { lineSpacing: number; capAscent: number; xAscent: number } {
+  const logical = logicalLines[lineIndex];
+  if (logical.hasText) {
+    return {
+      lineSpacing: textRowSpacing(logical.contentSpacing, defaultLineHeight),
+      capAscent: logical.capAscent,
+      xAscent: logical.xAscent,
+    };
+  }
+  return inheritedMetricsFrom(logicalLines, lineIndex - 1, defaultMetrics, defaultLineHeight);
+}
+
+function collectLogicalLines(
+  ctx: CanvasRenderingContext2D,
+  options: {
+    text: string;
+    fontSize: number;
+    fontFamily: string;
+    maxWidth: number;
+    textAlign: 'left' | 'center' | 'right';
+    margin: number;
+    metrics: RuledFontMetrics;
+    resolveFontSize: (charIndex: number) => number;
+    resolveCharAlign: (charIndex: number) => 'left' | 'center' | 'right';
+    metricsCache: Map<number, RuledFontMetrics>;
+    getCharLettersTouching?: (charIndex: number) => boolean;
+  }
+): LogicalLine[] {
+  const {
+    text,
+    fontSize,
+    fontFamily,
+    maxWidth,
+    textAlign,
+    margin,
+    metrics,
+    resolveFontSize,
+    resolveCharAlign,
+    metricsCache,
+    getCharLettersTouching,
+  } = options;
+
+  const availableWidth = Math.max(maxWidth - margin * 2, 100);
+  const paragraphs = text.split('\n');
+  const logicalLines: LogicalLine[] = [];
+  let paragraphStart = 0;
+
+  for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex += 1) {
+    const paragraph = paragraphs[paragraphIndex];
+    const paragraphAlign = resolveCharAlign(paragraphStart);
+
+    if (paragraph === '') {
+      logicalLines.push({
+        start: paragraphStart,
+        end: paragraphStart,
+        hasText: false,
+        contentSpacing: 0,
+        capAscent: 0,
+        xAscent: 0,
+        lineWidth: 0,
+        paragraphIndex,
+        paragraphAlign,
+        lineChars: [],
+      });
+      paragraphStart += 1;
+      continue;
+    }
+
+    const wrappedLines = wrapParagraph(
+      paragraph,
+      paragraphStart,
+      ctx,
+      availableWidth,
+      fontFamily,
+      resolveFontSize,
+      metricsCache,
+      getCharLettersTouching
+    );
+    let consumed = 0;
+
+    for (const line of wrappedLines) {
+      let lineWidth = 0;
+      let contentSpacing = 0;
+      let capAscent = 0;
+      let xAscent = 0;
+      const lineChars: LogicalChar[] = [];
+      let prevBounds: GlyphInkExtents | null = null;
+      let prevRenderSize = 0;
+
+      for (let lineCharIndex = 0; lineCharIndex < line.length; lineCharIndex += 1) {
+        const char = line[lineCharIndex];
+        const charIndex = paragraphStart + consumed;
+        const charMetrics = getMetricsForSize(fontFamily, resolveFontSize(charIndex), metricsCache);
+        const renderSize = charMetrics.renderFontSize;
+        const bounds = measureGlyphInkExtents(ctx, char, fontFamily, renderSize);
+        const charWidth = bounds.width;
+
+        // Advance is finalized when we know the next char; default to full width.
+        let advance = charWidth;
+        if (lineCharIndex > 0 && prevBounds) {
+          const prev = lineChars[lineCharIndex - 1];
+          if (
+            shouldTouchLetters(
+              prev.char,
+              char,
+              prev.charIndex,
+              charIndex,
+              getCharLettersTouching
+            )
+          ) {
+            prev.advance = touchingLetterAdvance(prevBounds, bounds, prevRenderSize);
+          }
+        }
+
+        lineChars.push({
+          char,
+          charIndex,
+          width: charWidth,
+          advance,
+          fontSize: resolveFontSize(charIndex),
+          renderSize,
+          capAscent: charMetrics.capAscent,
+          xAscent: charMetrics.xAscent,
+          lineHeight: charMetrics.lineHeight,
+        });
+        contentSpacing = Math.max(contentSpacing, charMetrics.lineHeight);
+        capAscent = Math.max(capAscent, charMetrics.capAscent);
+        xAscent = Math.max(xAscent, charMetrics.xAscent);
+        prevBounds = bounds;
+        prevRenderSize = renderSize;
+        consumed += 1;
+      }
+
+      if (lineChars.length > 0) {
+        let originX = 0;
+        for (let i = 0; i < lineChars.length - 1; i += 1) {
+          originX += lineChars[i].advance;
+        }
+        lineWidth = originX + lineChars[lineChars.length - 1].width;
+      }
+
+      const lineStartOffset = paragraphStart + consumed - line.length;
+      logicalLines.push({
+        start: lineStartOffset,
+        end: paragraphStart + consumed,
+        hasText: true,
+        contentSpacing,
+        capAscent: capAscent > 0 ? capAscent : metrics.capAscent,
+        xAscent: xAscent > 0 ? xAscent : metrics.xAscent,
+        lineWidth,
+        paragraphIndex,
+        paragraphAlign,
+        lineChars,
+      });
+    }
+
+    paragraphStart += paragraph.length + 1;
+  }
+
+  return logicalLines;
+}
+
 /** Single source of truth for worksheet text positions — shared by canvas + cursive links */
 export function layoutWorksheetText(
   ctx: CanvasRenderingContext2D,
@@ -185,6 +490,7 @@ export function layoutWorksheetText(
     fontMetrics: providedMetrics,
     getCharFontSize,
     getCharAlign,
+    getCharLettersTouching,
   } = options;
 
   const fontFamily = font || 'Playwrite US Modern';
@@ -199,14 +505,24 @@ export function layoutWorksheetText(
   ctx.textBaseline = 'alphabetic';
 
   const startX = margin;
-  let pageIndex = 0;
-  let baselineY = margin + ruledHeight;
-  const availableWidth = Math.max(maxWidth - margin * 2, 100);
-  const paragraphs = text.split('\n');
+  const logicalLines = collectLogicalLines(ctx, {
+    text,
+    fontSize,
+    fontFamily,
+    maxWidth,
+    textAlign,
+    margin,
+    metrics,
+    resolveFontSize,
+    resolveCharAlign,
+    metricsCache,
+    getCharLettersTouching,
+  });
+
   const chars: PlacedChar[] = [];
   const placedLines: PlacedLine[] = [];
-  let paragraphStart = 0;
-  let lineIndex = 0;
+  let pageIndex = 0;
+  let baselineY = margin + ruledHeight;
   let previousLineBaseline: number | null = null;
 
   const maxBaselineForPage = (currentPageIndex: number) =>
@@ -222,15 +538,18 @@ export function layoutWorksheetText(
     previousLineBaseline = null;
   };
 
-  for (let paragraphIndex = 0; paragraphIndex < paragraphs.length; paragraphIndex++) {
-    const paragraph = paragraphs[paragraphIndex];
-    const paragraphAlign = resolveCharAlign(paragraphStart);
+  for (let lineIndex = 0; lineIndex < logicalLines.length; lineIndex += 1) {
+    const logical = logicalLines[lineIndex];
+    const rowMetrics = rowMetricsForLine(logicalLines, lineIndex, metrics, lineHeight);
+    const lineCapAscent = rowMetrics.capAscent;
 
-    if (paragraph === '') {
-      ensurePageCapacity();
+    ensurePageCapacity();
+
+    if (lineIndex > 0) {
+      const gap = gapToLine(logicalLines, lineIndex, lineHeight);
       const resolved = resolveLineBaseline(
-        baselineY,
-        metrics.capAscent,
+        baselineY + gap,
+        lineCapAscent,
         pageIndex,
         margin,
         ruledHeight,
@@ -238,70 +557,7 @@ export function layoutWorksheetText(
       );
       baselineY = resolved.baselineY;
       pageIndex = resolved.pageIndex;
-      placedLines.push({
-        start: paragraphStart,
-        end: paragraphStart,
-        x: alignedLineX(0, startX, availableWidth, paragraphAlign),
-        baselineY,
-        pageIndex,
-        lineIndex,
-      });
-      previousLineBaseline = baselineY;
-      baselineY += lineHeight;
-      ensurePageCapacity();
-      lineIndex += 1;
-      paragraphStart += 1;
-      continue;
-    }
-
-    const lines = wrapParagraph(
-      paragraph,
-      paragraphStart,
-      ctx,
-      availableWidth,
-      fontFamily,
-      resolveFontSize,
-      metricsCache
-    );
-    let consumed = 0;
-
-    for (let wrapIndex = 0; wrapIndex < lines.length; wrapIndex += 1) {
-      const line = lines[wrapIndex];
-      ensurePageCapacity();
-
-      let lineWidth = 0;
-      let lineMaxHeight = 0;
-      let lineCapAscent = 0;
-      const lineChars: Array<{
-        char: string;
-        charIndex: number;
-        width: number;
-        fontSize: number;
-        renderSize: number;
-        capAscent: number;
-        xAscent: number;
-      }> = [];
-
-      for (const char of line) {
-        const charIndex = paragraphStart + consumed;
-        const charMetrics = getMetricsForSize(fontFamily, resolveFontSize(charIndex), metricsCache);
-        ctx.font = formatCanvasFont(fontFamily, charMetrics.renderFontSize);
-        const charWidth = ctx.measureText(char).width;
-        lineChars.push({
-          char,
-          charIndex,
-          width: charWidth,
-          fontSize: resolveFontSize(charIndex),
-          renderSize: charMetrics.renderFontSize,
-          capAscent: charMetrics.capAscent,
-          xAscent: charMetrics.xAscent,
-        });
-        lineWidth += charWidth;
-        lineMaxHeight = Math.max(lineMaxHeight, charMetrics.lineHeight);
-        lineCapAscent = Math.max(lineCapAscent, charMetrics.capAscent);
-        consumed += 1;
-      }
-
+    } else {
       const resolved = resolveLineBaseline(
         baselineY,
         lineCapAscent,
@@ -312,45 +568,49 @@ export function layoutWorksheetText(
       );
       baselineY = resolved.baselineY;
       pageIndex = resolved.pageIndex;
-
-      let x = alignedLineX(lineWidth, startX, availableWidth, paragraphAlign);
-      const lineX = x;
-      const lineStartOffset = paragraphStart + consumed - line.length;
-
-      for (const placedChar of lineChars) {
-        chars.push({
-          char: placedChar.char,
-          charIndex: placedChar.charIndex,
-          x,
-          baselineY,
-          width: placedChar.width,
-          lineIndex,
-          paragraphIndex,
-          pageIndex,
-          fontSize: placedChar.fontSize,
-          renderSize: placedChar.renderSize,
-          capAscent: placedChar.capAscent,
-          xAscent: placedChar.xAscent,
-        });
-        x += placedChar.width;
-      }
-
-      placedLines.push({
-        start: lineStartOffset,
-        end: paragraphStart + consumed,
-        x: lineX,
-        baselineY,
-        pageIndex,
-        lineIndex,
-      });
-
-      previousLineBaseline = baselineY;
-      baselineY += Math.max(lineMaxHeight, lineHeight);
-      ensurePageCapacity();
-      lineIndex += 1;
     }
 
-    paragraphStart += paragraph.length + 1;
+    const lineX = alignedLineX(
+      logical.lineWidth,
+      startX,
+      Math.max(maxWidth - margin * 2, 100),
+      logical.paragraphAlign
+    );
+
+    let x = lineX;
+    for (const placedChar of logical.lineChars) {
+      chars.push({
+        char: placedChar.char,
+        charIndex: placedChar.charIndex,
+        x,
+        baselineY,
+        width: placedChar.width,
+        lineIndex,
+        paragraphIndex: logical.paragraphIndex,
+        pageIndex,
+        fontSize: placedChar.fontSize,
+        renderSize: placedChar.renderSize,
+        capAscent: placedChar.capAscent,
+        xAscent: placedChar.xAscent,
+      });
+      x += placedChar.advance;
+    }
+
+    placedLines.push({
+      start: logical.start,
+      end: logical.end,
+      x: lineX,
+      baselineY,
+      pageIndex,
+      lineIndex,
+      lineSpacing: rowMetrics.lineSpacing,
+      capAscent: rowMetrics.capAscent,
+      xAscent: rowMetrics.xAscent,
+      hasText: logical.hasText,
+    });
+
+    previousLineBaseline = baselineY;
+    ensurePageCapacity();
   }
 
   return {
@@ -379,6 +639,14 @@ export function measureWorksheetLayout(options: WorksheetTextOptions): Worksheet
 export interface CaretPosition {
   x: number;
   baselineY: number;
+}
+
+export function lineSpacingForIndex(
+  layout: WorksheetTextLayout,
+  lineIndex: number
+): number {
+  const line = layout.lines.find((entry) => entry.lineIndex === lineIndex);
+  return line?.lineSpacing ?? layout.lineHeight;
 }
 
 /** Index into layout.lines of the visual line containing the given text offset. */
@@ -438,6 +706,74 @@ export function caretPositionFromLayout(
   }
 
   return { x: line.x, baselineY: line.baselineY };
+}
+
+/**
+ * Find the layout line at a page-local y. Uses cap-ascent bands so clicks on the
+ * upper half of a row (e.g. just before the first letter) stay on that line.
+ */
+export function lineForLocalPageY(
+  lines: PlacedLine[],
+  localPageY: number,
+  pageIndex: number,
+  fallbackCapAscent: number
+): PlacedLine | null {
+  if (lines.length === 0) return null;
+
+  const sorted = [...lines].sort((a, b) => a.baselineY - b.baselineY);
+
+  for (let index = sorted.length - 1; index >= 0; index -= 1) {
+    const line = sorted[index];
+    const capAscent = line.capAscent > 0 ? line.capAscent : fallbackCapAscent;
+    const localBaseline = line.baselineY - pageIndex * PAGE_HEIGHT;
+    if (localPageY >= localBaseline - capAscent) {
+      return line;
+    }
+  }
+
+  return sorted[0];
+}
+
+/** Pick the text offset on a line whose caret x is nearest to a click x. */
+export function closestOffsetOnLine(
+  layout: WorksheetTextLayout,
+  line: PlacedLine,
+  clickX: number
+): number {
+  if (line.hasText) {
+    const firstChar = layout.chars
+      .filter((char) => char.lineIndex === line.lineIndex)
+      .sort((a, b) => a.charIndex - b.charIndex)[0];
+
+    if (firstChar) {
+      const firstCaretX = caretPositionFromLayout(layout, firstChar.charIndex).x;
+      if (clickX <= firstCaretX) {
+        return line.start;
+      }
+    }
+  }
+
+  const offsets = new Set<number>([line.start, line.end]);
+
+  for (const char of layout.chars) {
+    if (char.lineIndex !== line.lineIndex) continue;
+    offsets.add(char.charIndex);
+    offsets.add(char.charIndex + 1);
+  }
+
+  let bestOffset = line.start;
+  let bestDistance = Infinity;
+
+  for (const offset of offsets) {
+    const position = caretPositionFromLayout(layout, offset);
+    const distance = Math.abs(position.x - clickX);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestOffset = offset;
+    }
+  }
+
+  return bestOffset;
 }
 
 /** Caret position for any plain-text offset, matching layoutWorksheetText exactly. */

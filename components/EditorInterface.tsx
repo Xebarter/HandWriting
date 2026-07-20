@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { AlertCircle, CheckCircle, Copy, Download, FilePlus, FolderOpen, Loader2, LogOut, Printer, Save } from 'lucide-react';
+import { AlertCircle, CheckCircle, Copy, Download, FilePlus, FolderOpen, Loader2, LogOut, Printer, Redo2, Save, Undo2 } from 'lucide-react';
 import { AppLogo } from '@/components/AppLogo';
 import { useRouter } from 'next/navigation';
 import { DocumentRibbon } from '@/components/word/DocumentRibbon';
@@ -9,7 +9,7 @@ import { DocumentWorkspace, type EditorActions } from '@/components/word/Documen
 import { DocumentPicker } from '@/components/word/DocumentPicker';
 import { WordStatusBar } from '@/components/word/WordStatusBar';
 import { HandwritingMode, PaperType, FontMetadata, LetterConnection, TextStyleRange } from '@/lib/types';
-import { PAGE_WIDTH, PAGE_HEIGHT } from '@/lib/document-constants';
+import { DEFAULT_FONT_SIZE, PAGE_WIDTH, PAGE_HEIGHT } from '@/lib/document-constants';
 import { captureWorksheetCanvas, logicalPxToMm } from '@/lib/worksheet-snapshot';
 import { ExportManager, copyCanvasToClipboard, printCanvas } from '@/lib/export';
 import { useInstalledFonts } from '@/lib/hooks/useInstalledFonts';
@@ -71,9 +71,9 @@ export const EditorInterface: React.FC = () => {
   const router = useRouter();
   const [text, setText] = useState('');
   const [mode, setMode] = useState<HandwritingMode>('solid');
-  const [fontSize, setFontSize] = useState(48);
+  const [fontSize, setFontSize] = useState(DEFAULT_FONT_SIZE);
   /** Base size for unstyled text and ruled-line metrics — not the ribbon display alone. */
-  const [defaultFontSize, setDefaultFontSize] = useState(48);
+  const [defaultFontSize, setDefaultFontSize] = useState(DEFAULT_FONT_SIZE);
   const [dotSpacing, setDotSpacing] = useState(8);
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [paperType, setPaperType] = useState<PaperType>('ruled');
@@ -99,6 +99,8 @@ export const EditorInterface: React.FC = () => {
   const [isLoadingDocument, setIsLoadingDocument] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saveIndicator, setSaveIndicator] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
   const [activePage, setActivePage] = useState(1);
   const [pageCount, setPageCount] = useState(1);
   const [renderedPageHeight, setRenderedPageHeight] = useState(PAGE_HEIGHT);
@@ -317,10 +319,12 @@ export const EditorInterface: React.FC = () => {
       getResolvedTextStyle(textStyleRanges, charIndex, {
         mode,
         linksEnabled: autoLinkEnabled,
+        lettersTouching: false,
         fontSize: defaultFontSize,
         textAlign,
+        textColor,
       }),
-    [textStyleRanges, mode, autoLinkEnabled, defaultFontSize, textAlign]
+    [textStyleRanges, mode, autoLinkEnabled, defaultFontSize, textAlign, textColor]
   );
 
   const getCharFontSize = useCallback(
@@ -335,6 +339,16 @@ export const EditorInterface: React.FC = () => {
 
   const getCharAlign = useCallback(
     (charIndex: number) => getCharStyle(charIndex).textAlign,
+    [getCharStyle]
+  );
+
+  const getCharColor = useCallback(
+    (charIndex: number) => getCharStyle(charIndex).textColor,
+    [getCharStyle]
+  );
+
+  const getCharLettersTouching = useCallback(
+    (charIndex: number) => getCharStyle(charIndex).lettersTouching,
     [getCharStyle]
   );
 
@@ -377,8 +391,10 @@ export const EditorInterface: React.FC = () => {
         getResolvedTextStyle(textStyleRanges, charIndex, {
           mode,
           linksEnabled: true,
+          lettersTouching: false,
           fontSize: defaultFontSize,
           textAlign,
+          textColor,
         });
 
       setConnections(
@@ -419,10 +435,22 @@ export const EditorInterface: React.FC = () => {
       const paragraphAlign = getResolvedTextStyle(textStyleRanges, paragraphStart, {
         mode,
         linksEnabled: autoLinkEnabled,
+        lettersTouching: false,
         fontSize: defaultFontSizeRef.current,
         textAlign,
+        textColor,
       }).textAlign;
       setTextAlign((current) => (current === paragraphAlign ? current : paragraphAlign));
+
+      const selectionColor = getResolvedTextStyle(textStyleRanges, index, {
+        mode,
+        linksEnabled: autoLinkEnabled,
+        lettersTouching: false,
+        fontSize: defaultFontSizeRef.current,
+        textAlign,
+        textColor,
+      }).textColor;
+      setTextColor((current) => (current === selectionColor ? current : selectionColor));
 
       // Sync ribbon font size only for a collapsed caret. Updating during range
       // selection relayouts default-sized text and shifts hit-testing, which can
@@ -432,8 +460,10 @@ export const EditorInterface: React.FC = () => {
       const resolved = getResolvedTextStyle(textStyleRanges, index, {
         mode,
         linksEnabled: autoLinkEnabled,
+        lettersTouching: false,
         fontSize: defaultFontSizeRef.current,
         textAlign,
+        textColor,
       });
       const last = lastSelectionStyleRef.current;
       if (last && last.index === index && last.fontSize === resolved.fontSize) {
@@ -444,7 +474,7 @@ export const EditorInterface: React.FC = () => {
         current === resolved.fontSize ? current : resolved.fontSize
       );
     },
-    [autoLinkEnabled, mode, text, textAlign, textStyleRanges]
+    [autoLinkEnabled, mode, text, textAlign, textColor, textStyleRanges]
   );
 
   const handleActivePageChange = useCallback((page: number, total: number) => {
@@ -485,13 +515,33 @@ export const EditorInterface: React.FC = () => {
     setIsDirty(true);
   }, []);
 
+  const handleHistoryStateChange = useCallback(
+    (state: { canUndo: boolean; canRedo: boolean }) => {
+      setCanUndo(state.canUndo);
+      setCanRedo(state.canRedo);
+    },
+    []
+  );
+
+  const handleUndo = useCallback(() => {
+    editorActionsRef.current?.undo();
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    editorActionsRef.current?.redo();
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }, []);
+
   const getEditorSelectionOffsets = useCallback(() => {
     return editorSelectionRef.current;
   }, []);
 
   const applySelectionTextStyle = useCallback(
     (
-      patch: Partial<Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'fontSize'>>,
+      patch: Partial<
+        Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textColor'>
+      >,
       onNoSelection: () => void
     ) => {
       const offsets = getEditorSelectionOffsets();
@@ -511,7 +561,9 @@ export const EditorInterface: React.FC = () => {
   const modifySelectedText = useCallback(
     (transform: (value: string) => string) => {
       const offsets = getEditorSelectionOffsets();
-      if (!offsets) return;
+      if (!offsets || offsets.start === offsets.end) return;
+
+      editorActionsRef.current?.recordHistory('other');
 
       const currentText = text;
       const selectedText = currentText.slice(offsets.start, offsets.end);
@@ -685,6 +737,36 @@ export const EditorInterface: React.FC = () => {
   }, [handleSaveDocument]);
 
   useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const ctrl = event.ctrlKey || event.metaKey;
+      if (!ctrl || event.altKey) return;
+
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT') {
+        return;
+      }
+
+      const lower = event.key.toLowerCase();
+      const isUndo = lower === 'z' && !event.shiftKey;
+      const isRedo = lower === 'y' || (lower === 'z' && event.shiftKey);
+      if (!isUndo && !isRedo) return;
+
+      event.preventDefault();
+      if (isUndo) {
+        editorActionsRef.current?.undo();
+      } else {
+        editorActionsRef.current?.redo();
+      }
+      requestAnimationFrame(() => editorRef.current?.focus());
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  useEffect(() => {
     if (!isDirty || isLoadingDocument || isSigningOut) {
       return;
     }
@@ -764,6 +846,25 @@ export const EditorInterface: React.FC = () => {
     [applySelectionTextStyle]
   );
 
+  const handleTextColorChange = useCallback(
+    (value: string) => {
+      editorActionsRef.current?.recordHistory('other');
+      setTextColor(value);
+
+      const offsets = getEditorSelectionOffsets();
+      if (!offsets || offsets.start === offsets.end) {
+        setIsDirty(true);
+        return;
+      }
+
+      setTextStyleRanges((current) =>
+        applyTextStyleToRange(current, offsets.start, offsets.end, { textColor: value })
+      );
+      setIsDirty(true);
+    },
+    [getEditorSelectionOffsets]
+  );
+
   const handleEnableLinks = useCallback(() => {
     const layout = layoutRef.current;
     if (layout.length === 0) return;
@@ -777,15 +878,20 @@ export const EditorInterface: React.FC = () => {
     const selectionEnd = offsets.end;
 
     setTextStyleRanges((current) =>
-      applyTextStyleToRange(current, selectionStart, selectionEnd, { linksEnabled: true })
+      applyTextStyleToRange(current, selectionStart, selectionEnd, {
+        linksEnabled: true,
+        lettersTouching: false,
+      })
     );
 
     const getScopedCharStyle = (charIndex: number) => {
       const resolved = getResolvedTextStyle(textStyleRanges, charIndex, {
         mode,
         linksEnabled: false,
+        lettersTouching: false,
         fontSize: defaultFontSize,
         textAlign,
+        textColor,
       });
       return {
         ...resolved,
@@ -816,7 +922,32 @@ export const EditorInterface: React.FC = () => {
     strokeWidth,
     textStyleRanges,
     defaultFontSize,
+    textAlign,
+    textColor,
   ]);
+
+  const handleEnableTouching = useCallback(() => {
+    const offsets = getEditorSelectionOffsets();
+    if (!offsets || offsets.start === offsets.end) return;
+
+    editorActionsRef.current?.recordHistory('other');
+
+    const selectionStart = offsets.start;
+    const selectionEnd = offsets.end;
+
+    setAutoLinkEnabled(false);
+    setTextStyleRanges((current) =>
+      applyTextStyleToRange(current, selectionStart, selectionEnd, {
+        lettersTouching: true,
+        linksEnabled: false,
+      })
+    );
+    setConnections((current) =>
+      removeConnectionsInRange(current, selectionStart, selectionEnd)
+    );
+    setConnectMode(false);
+    setIsDirty(true);
+  }, [getEditorSelectionOffsets]);
 
   const handleDisableLinks = useCallback(() => {
     const offsets = getEditorSelectionOffsets();
@@ -829,7 +960,10 @@ export const EditorInterface: React.FC = () => {
 
     setAutoLinkEnabled(false);
     setTextStyleRanges((current) =>
-      applyTextStyleToRange(current, selectionStart, selectionEnd, { linksEnabled: false })
+      applyTextStyleToRange(current, selectionStart, selectionEnd, {
+        linksEnabled: false,
+        lettersTouching: false,
+      })
     );
     setConnections((current) =>
       removeConnectionsInRange(current, selectionStart, selectionEnd)
@@ -850,8 +984,10 @@ export const EditorInterface: React.FC = () => {
     const styleDefaults = {
       mode,
       linksEnabled: autoLinkEnabled,
+      lettersTouching: false,
       fontSize: defaultFontSize,
       textAlign,
+      textColor,
     };
 
     for (let index = start; index < end; index += 1) {
@@ -871,6 +1007,39 @@ export const EditorInterface: React.FC = () => {
     selectionRange,
     textStyleRanges,
     textAlign,
+    textColor,
+  ]);
+
+  const touchingActive = useMemo(() => {
+    if (!selectionRange || selectionRange.start === selectionRange.end) {
+      return false;
+    }
+
+    const { start, end } = selectionRange;
+    const styleDefaults = {
+      mode,
+      linksEnabled: autoLinkEnabled,
+      lettersTouching: false,
+      fontSize: defaultFontSize,
+      textAlign,
+      textColor,
+    };
+
+    for (let index = start; index < end; index += 1) {
+      if (getResolvedTextStyle(textStyleRanges, index, styleDefaults).lettersTouching) {
+        return true;
+      }
+    }
+
+    return false;
+  }, [
+    autoLinkEnabled,
+    defaultFontSize,
+    mode,
+    selectionRange,
+    textStyleRanges,
+    textAlign,
+    textColor,
   ]);
 
   const handleTextAlignChange = useCallback(
@@ -905,6 +1074,17 @@ export const EditorInterface: React.FC = () => {
 
     handleEnableLinks();
   }, [canLinkSelection, handleDisableLinks, handleEnableLinks, linksActive]);
+
+  const handleToggleTouching = useCallback(() => {
+    if (!canLinkSelection) return;
+
+    if (touchingActive) {
+      handleDisableLinks();
+      return;
+    }
+
+    handleEnableTouching();
+  }, [canLinkSelection, handleDisableLinks, handleEnableTouching, touchingActive]);
 
   const getWorksheetSnapshot = useCallback(
     async (dpi: number = 96) => {
@@ -1090,6 +1270,29 @@ export const EditorInterface: React.FC = () => {
 
             <button
               type="button"
+              onClick={handleUndo}
+              disabled={!canUndo}
+              className="qat-btn disabled:opacity-40"
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo"
+            >
+              <Undo2 size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={handleRedo}
+              disabled={!canRedo}
+              className="qat-btn disabled:opacity-40"
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo"
+            >
+              <Redo2 size={15} />
+            </button>
+
+            <div className="mx-1 hidden h-5 w-px bg-white/20 md:block" />
+
+            <button
+              type="button"
               onClick={handleExport}
               className="qat-btn"
               title="Export"
@@ -1179,10 +1382,7 @@ export const EditorInterface: React.FC = () => {
         onFontSizeChange={handleFontSizeChange}
         onFontFamilyChange={handleFontFamilyChange}
         textColor={textColor}
-        onTextColorChange={(value) => {
-          setTextColor(value);
-          setIsDirty(true);
-        }}
+        onTextColorChange={handleTextColorChange}
         textAlign={textAlign}
         onTextAlignChange={handleTextAlignChange}
         onUppercase={applyUppercase}
@@ -1223,8 +1423,10 @@ export const EditorInterface: React.FC = () => {
         onPrint={handlePrint}
         onReset={handleReset}
         linksActive={linksActive}
+        touchingActive={touchingActive}
         canLinkSelection={canLinkSelection}
         onToggleLinks={handleToggleLinks}
+        onToggleTouching={handleToggleTouching}
         onClearConnections={handleDisableLinks}
         fontLibrary={{
           fonts: installedFonts,
@@ -1261,12 +1463,15 @@ export const EditorInterface: React.FC = () => {
         getCharMode={getCharMode}
         getCharFontSize={getCharFontSize}
         getCharAlign={getCharAlign}
+        getCharColor={getCharColor}
+        getCharLettersTouching={getCharLettersTouching}
         onActivePageChange={handleActivePageChange}
         onDocumentMetricsChange={handleDocumentMetricsChange}
         onSelectionChange={handleEditorSelectionChange}
         registerEditorActions={registerEditorActions}
         getDocumentHistoryState={getDocumentHistoryState}
         onHistoryApply={applyHistoryEntry}
+        onHistoryStateChange={handleHistoryStateChange}
       />
 
       <WordStatusBar

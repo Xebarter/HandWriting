@@ -1,14 +1,14 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState, forwardRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, forwardRef } from 'react';
 import { HandwritingMode, LetterPattern, Stroke, ImageAsset, LayoutConfig, LetterConnection } from '@/lib/types';
-import { PAGE_HEIGHT, PAGE_MARGIN } from '@/lib/document-constants';
+import { DEFAULT_FONT_SIZE, PAGE_HEIGHT, PAGE_MARGIN } from '@/lib/document-constants';
 import { getLineHeight, getRuledRowHeight } from '@/lib/text-layout';
 import { drawRuledLinesFromLayout, drawRuledRowLines, ruledRowGuide } from '@/lib/ruled-lines';
 import { measureRuledFont, RuledFontMetrics } from '@/lib/font-metrics';
 import { drawPageMarginLines, pageContentArea } from '@/lib/page-margins';
-import { drawWorksheetText } from '@/lib/canvas-text-renderer';
-import { measureWorksheetLayout } from '@/lib/text-line-layout';
+import { drawWorksheetText, drawWorksheetTextFromLayout } from '@/lib/canvas-text-renderer';
+import { measureWorksheetLayout, WorksheetTextLayout } from '@/lib/text-line-layout';
 import { renderConnections } from '@/lib/connection-engine';
 import * as drawingEngine from '@/lib/drawing-engine';
 import { renderLayout } from '@/lib/layout-engine';
@@ -50,8 +50,12 @@ interface HandwritingCanvasProps {
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
   getCharAlign?: (charIndex: number) => 'left' | 'center' | 'right';
+  getCharColor?: (charIndex: number) => string;
+  getCharLettersTouching?: (charIndex: number) => boolean;
   /** When set, only render this page slice (print-layout view). Full document height is still used internally. */
   clipPageIndex?: number;
+  /** Precomputed layout — skips re-layout during canvas paint for faster typing. */
+  textLayout?: WorksheetTextLayout | null;
 }
 
 export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvasProps>(
@@ -60,7 +64,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
       text,
       mode,
       patterns = [],
-      fontSize = 48,
+      fontSize = DEFAULT_FONT_SIZE,
       dotSpacing = 8,
       strokeWidth = 2,
       paperType = 'blank',
@@ -89,7 +93,10 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
       getCharMode,
       getCharFontSize,
       getCharAlign,
+      getCharColor,
+      getCharLettersTouching,
       clipPageIndex,
+      textLayout: providedTextLayout,
     },
     ref
   ) => {
@@ -206,10 +213,8 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    setIsRendering(true);
     const ctx = canvas.getContext('2d');
     if (!ctx) {
-      setIsRendering(false);
       return;
     }
 
@@ -233,7 +238,8 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
         fontMetrics ?? measureRuledFont(selectedFont || 'Playwrite US Modern', fontSize);
       const textLayout =
         paperType === 'ruled' && text
-          ? measureWorksheetLayout({
+          ? (providedTextLayout ??
+            measureWorksheetLayout({
               text,
               mode,
               fontSize,
@@ -249,7 +255,9 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
               getCharMode,
               getCharFontSize,
               getCharAlign,
-            })
+              getCharColor,
+              getCharLettersTouching,
+            }))
           : null;
 
       if (paperType === 'ruled' && textLayout) {
@@ -277,7 +285,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
       if (patterns.length > 0) {
         drawPatterns(ctx, patterns, mode, fontSize, dotSpacing, strokeWidth, textColor, dotColor, selectedFont);
       } else if (text) {
-        drawWorksheetText(ctx, {
+        const drawOptions = {
           text,
           mode,
           fontSize,
@@ -293,7 +301,15 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
           getCharMode,
           getCharFontSize,
           getCharAlign,
-        });
+          getCharColor,
+          getCharLettersTouching,
+        };
+
+        if (providedTextLayout) {
+          drawWorksheetTextFromLayout(ctx, providedTextLayout, drawOptions, clipPageIndex);
+        } else {
+          drawWorksheetText(ctx, drawOptions, clipPageIndex);
+        }
       }
     }
 
@@ -314,8 +330,6 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     }
 
     ctx.restore();
-
-    setIsRendering(false);
   }, [
     text,
     mode,
@@ -344,8 +358,11 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     getCharMode,
     getCharFontSize,
     getCharAlign,
+    getCharColor,
+    getCharLettersTouching,
     clipPageIndex,
     displayHeight,
+    providedTextLayout,
   ]);
 
   const drawBackgroundPattern = (
@@ -594,7 +611,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     ctx.fill();
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     renderCanvas();
   }, [renderCanvas]);
 

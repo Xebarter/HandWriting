@@ -582,6 +582,7 @@ function drawPlacedChar(
 ) {
   const { fontFamily } = layout;
   const { dotSpacing, strokeWidth, textColor, dotColor } = options;
+  const charColor = options.getCharColor?.(placed.charIndex) ?? textColor;
   const renderSize = placed.renderSize;
 
   ctx.font = formatCanvasFont(fontFamily, renderSize);
@@ -594,21 +595,21 @@ function drawPlacedChar(
   }
 
   if (mode === 'outline') {
-    ctx.strokeStyle = textColor;
+    ctx.strokeStyle = charColor;
     ctx.lineWidth = strokeWidth;
     ctx.strokeText(placed.char, placed.x, drawY);
     return;
   }
 
   if (mode === 'solid') {
-    ctx.fillStyle = textColor;
+    ctx.fillStyle = charColor;
     ctx.fillText(placed.char, placed.x, drawY);
     return;
   }
 
   if (mode === 'guide-lines') {
     drawGuideLines(ctx, placed.x, placed.baselineY, lineGuideMetrics(layout, placed));
-    ctx.fillStyle = textColor;
+    ctx.fillStyle = charColor;
     ctx.globalAlpha = 0.3;
     ctx.fillText(placed.char, placed.x, drawY);
     ctx.globalAlpha = 1;
@@ -617,10 +618,26 @@ function drawPlacedChar(
 
   if (mode === 'arrow-guides') {
     drawGuideLines(ctx, placed.x, placed.baselineY, lineGuideMetrics(layout, placed));
-    ctx.fillStyle = textColor;
+    ctx.fillStyle = charColor;
     ctx.globalAlpha = 0.2;
     ctx.fillText(placed.char, placed.x, drawY);
     ctx.globalAlpha = 1;
+  }
+}
+
+/** Draw precomputed worksheet text without re-running layout. */
+export function drawWorksheetTextFromLayout(
+  ctx: CanvasRenderingContext2D,
+  layout: WorksheetTextLayout,
+  options: WorksheetTextOptions,
+  clipPageIndex?: number
+): void {
+  for (const placed of layout.chars) {
+    if (clipPageIndex !== undefined && placed.pageIndex !== clipPageIndex) {
+      continue;
+    }
+    const charMode = options.getCharMode?.(placed.charIndex) ?? options.mode;
+    drawPlacedChar(ctx, placed, layout, charMode, options);
   }
 }
 
@@ -629,14 +646,10 @@ function drawPlacedChar(
  */
 export function drawWorksheetText(
   ctx: CanvasRenderingContext2D,
-  options: WorksheetTextOptions
+  options: WorksheetTextOptions,
+  clipPageIndex?: number
 ): WorksheetTextLayout {
   const layout = layoutWorksheetText(ctx, options);
-
-  for (const placed of layout.chars) {
-    const charMode = options.getCharMode?.(placed.charIndex) ?? options.mode;
-    drawPlacedChar(ctx, placed, layout, charMode, options);
-  }
-
+  drawWorksheetTextFromLayout(ctx, layout, options, clipPageIndex);
   return layout;
 }

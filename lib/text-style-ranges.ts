@@ -5,8 +5,10 @@ export type TextAlign = 'left' | 'center' | 'right';
 export interface ResolvedTextStyle {
   mode: HandwritingMode;
   linksEnabled: boolean;
+  lettersTouching: boolean;
   fontSize: number;
   textAlign: TextAlign;
+  textColor: string;
 }
 
 export function getResolvedTextStyle(
@@ -21,8 +23,10 @@ export function getResolvedTextStyle(
     resolved = {
       mode: range.mode ?? resolved.mode,
       linksEnabled: range.linksEnabled ?? resolved.linksEnabled,
+      lettersTouching: range.lettersTouching ?? resolved.lettersTouching,
       fontSize: range.fontSize ?? resolved.fontSize,
       textAlign: range.textAlign ?? resolved.textAlign,
+      textColor: range.textColor ?? resolved.textColor,
     };
   }
 
@@ -33,8 +37,10 @@ function sameStyle(a: TextStyleRange, b: TextStyleRange): boolean {
   return (
     a.mode === b.mode &&
     a.linksEnabled === b.linksEnabled &&
+    a.lettersTouching === b.lettersTouching &&
     a.fontSize === b.fontSize &&
-    a.textAlign === b.textAlign
+    a.textAlign === b.textAlign &&
+    a.textColor === b.textColor
   );
 }
 
@@ -57,13 +63,44 @@ export function normalizeTextStyleRanges(ranges: TextStyleRange[]): TextStyleRan
   return normalized;
 }
 
+function mergedStyleInRange(
+  ranges: TextStyleRange[],
+  start: number,
+  end: number
+): Partial<
+  Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'>
+> {
+  const merged: Partial<
+    Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'>
+  > = {};
+
+  for (const range of ranges) {
+    if (range.end <= start || range.start >= end) continue;
+    if (range.mode !== undefined) merged.mode = range.mode;
+    if (range.linksEnabled !== undefined) merged.linksEnabled = range.linksEnabled;
+    if (range.lettersTouching !== undefined) merged.lettersTouching = range.lettersTouching;
+    if (range.fontSize !== undefined) merged.fontSize = range.fontSize;
+    if (range.textAlign !== undefined) merged.textAlign = range.textAlign;
+    if (range.textColor !== undefined) merged.textColor = range.textColor;
+  }
+
+  return merged;
+}
+
 export function applyTextStyleToRange(
   ranges: TextStyleRange[],
   start: number,
   end: number,
-  patch: Partial<Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'fontSize' | 'textAlign'>>
+  patch: Partial<
+    Pick<
+      TextStyleRange,
+      'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'
+    >
+  >
 ): TextStyleRange[] {
   if (end <= start) return ranges;
+
+  const inherited = mergedStyleInRange(ranges, start, end);
 
   const next: TextStyleRange[] = [];
   for (const range of ranges) {
@@ -84,10 +121,12 @@ export function applyTextStyleToRange(
   next.push({
     start,
     end,
-    mode: patch.mode,
-    linksEnabled: patch.linksEnabled,
-    fontSize: patch.fontSize,
-    textAlign: patch.textAlign,
+    mode: patch.mode ?? inherited.mode,
+    linksEnabled: patch.linksEnabled ?? inherited.linksEnabled,
+    lettersTouching: patch.lettersTouching ?? inherited.lettersTouching,
+    fontSize: patch.fontSize ?? inherited.fontSize,
+    textAlign: patch.textAlign ?? inherited.textAlign,
+    textColor: patch.textColor ?? inherited.textColor,
   });
 
   return normalizeTextStyleRanges(next);
@@ -100,8 +139,10 @@ export function stripModeFromRanges(ranges: TextStyleRange[]): TextStyleRange[] 
       .filter(
         (range) =>
           range.linksEnabled !== undefined ||
+          range.lettersTouching !== undefined ||
           range.fontSize !== undefined ||
-          range.textAlign !== undefined
+          range.textAlign !== undefined ||
+          range.textColor !== undefined
       )
   );
 }

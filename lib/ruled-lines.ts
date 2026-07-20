@@ -3,13 +3,13 @@ import { RuledFontMetrics } from './font-metrics';
 import { pageContentArea, PageContentArea } from './page-margins';
 import { PlacedLine, WorksheetTextLayout } from './text-line-layout';
 
-/** Strong ruled lines (cap line + baseline) */
-export const RULED_LINE_STRONG_COLOR = '#9bb8e8';
-/** Middle line uses the same hue at low opacity so it stays faint in print */
-export const RULED_LINE_MID_COLOR = '#9bb8e8';
-export const RULED_LINE_MID_OPACITY = 0.32;
-export const RULED_LINE_STRONG_WIDTH = 1;
-export const RULED_LINE_MID_WIDTH = 0.75;
+/** Top + baseline — darkest/thickest tier for print */
+export const RULED_LINE_STRONG_COLOR = '#0F2D5C';
+export const RULED_LINE_STRONG_WIDTH = 3.25;
+/** x-height line — matches the previous strong tier; stays lighter than cap/baseline */
+export const RULED_LINE_MID_COLOR = '#4070C0';
+export const RULED_LINE_MID_WIDTH = 1.75;
+export const RULED_LINE_MID_OPACITY = 1;
 
 export interface RuledRowGuide {
   topY: number;
@@ -45,6 +45,8 @@ function strokeHorizontalInArea(
   ctx.strokeStyle = color;
   ctx.globalAlpha = opacity;
   ctx.lineWidth = lineWidth;
+  ctx.lineCap = 'butt';
+  ctx.lineJoin = 'miter';
   ctx.setLineDash([]);
   ctx.beginPath();
   ctx.moveTo(area.left, y);
@@ -117,11 +119,19 @@ export interface LineRowMetrics {
   lineHeight: number;
 }
 
-/** Per-row cap / x-height metrics from the tallest character on that line. */
+/** Per-row cap / x-height metrics from layout (inherits above for empty rows). */
 export function lineRowMetrics(
   layout: WorksheetTextLayout,
   line: PlacedLine
 ): LineRowMetrics {
+  if (line.lineSpacing > 0 && line.capAscent > 0 && line.xAscent > 0) {
+    return {
+      capAscent: line.capAscent,
+      xAscent: line.xAscent,
+      lineHeight: line.lineSpacing,
+    };
+  }
+
   const lineChars = layout.chars.filter((char) => char.lineIndex === line.lineIndex);
 
   if (lineChars.length === 0) {

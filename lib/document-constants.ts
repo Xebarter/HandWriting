@@ -12,6 +12,9 @@ export const LEFT_MARGIN_LINE_COLOR = PAGE_MARGIN_LINE_COLOR;
 /** @deprecated Use PAGE_MARGIN_LINE_WIDTH */
 export const LEFT_MARGIN_LINE_WIDTH = PAGE_MARGIN_LINE_WIDTH;
 
+/** Default document font size — ruled row height and line spacing derive from this. */
+export const DEFAULT_FONT_SIZE = 36;
+
 export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72] as const;
 
 export const FONT_FAMILIES = [

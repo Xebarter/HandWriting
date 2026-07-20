@@ -410,7 +410,7 @@ export function printCanvas(
       @page { size: ${pageWidthMm}mm ${pageHeightMm}mm; margin: 0; }
       * { box-sizing: border-box; }
       html, body { margin: 0; padding: 0; }
-      body { background: #fff; }
+      body { background: #fff; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .print-page {
         width: ${pageWidthMm}mm;
         height: ${pageHeightMm}mm;
@@ -418,7 +418,14 @@ export function printCanvas(
         overflow: hidden;
       }
       .print-page:last-child { page-break-after: auto; }
-      img { width: 100%; height: 100%; display: block; object-fit: contain; }
+      img {
+        width: 100%;
+        height: 100%;
+        display: block;
+        object-fit: contain;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
     </style>
   </head>
   <body onload="window.focus(); window.print();">

@@ -110,6 +110,13 @@ export async function uploadFont(
   }
 }
 
+function isStorageObjectMissing(error: { message?: string; statusCode?: string | number } | null): boolean {
+  if (!error) return false;
+  const message = (error.message || '').toLowerCase();
+  const status = String(error.statusCode ?? '');
+  return status === '404' || message.includes('object not found') || message.includes('not found');
+}
+
 export async function downloadFont(filePath: string): Promise<ArrayBuffer | null> {
   try {
     const supabase = createClient();
@@ -118,6 +125,10 @@ export async function downloadFont(filePath: string): Promise<ArrayBuffer | null
       .download(filePath);
 
     if (error) {
+      if (isStorageObjectMissing(error)) {
+        console.warn(`[fonts] Missing storage object: ${filePath}`);
+        return null;
+      }
       console.error('[v0] Font download error:', error);
       return null;
     }

@@ -72,8 +72,10 @@ interface DocumentRibbonProps {
   onPrint: () => void;
   onReset: () => void;
   linksActive: boolean;
+  touchingActive: boolean;
   canLinkSelection: boolean;
   onToggleLinks: () => void;
+  onToggleTouching: () => void;
   onClearConnections: () => void;
 }
 
@@ -204,7 +206,7 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
                 onChange={(e) => props.onTextColorChange(e.target.value)}
                 className="h-7 w-7 shrink-0 cursor-pointer rounded border border-[#e1dfdd] bg-white p-0.5"
                 aria-label="Text color"
-                title="Font color"
+                title="Font color (selection or default)"
               />
             </RibbonGroup>
 
@@ -300,11 +302,28 @@ export const DocumentRibbon: React.FC<DocumentRibbonProps> = (props) => {
                 compact
               />
               <RibbonButton
+                label="Touch"
+                active={props.touchingActive}
+                onClick={props.onToggleTouching}
+                onMouseDown={(e) => e.preventDefault()}
+                disabled={!props.canLinkSelection}
+                title={
+                  !props.canLinkSelection
+                    ? 'Select text to pull letters together'
+                    : props.touchingActive
+                      ? 'Stop letters from touching in the selection'
+                      : 'Pull letters together so their ink touches'
+                }
+                compact
+              />
+              <RibbonButton
                 label="Clear"
                 onClick={props.onClearConnections}
-                title="Remove cursive links from the selection"
+                title="Remove cursive links and touching from the selection"
                 compact
-                disabled={!props.canLinkSelection || !props.linksActive}
+                disabled={
+                  !props.canLinkSelection || (!props.linksActive && !props.touchingActive)
+                }
               />
             </RibbonGroup>
 

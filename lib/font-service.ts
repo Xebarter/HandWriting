@@ -39,20 +39,22 @@ function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
-/** Download font bytes from storage and cache locally when missing */
-export async function hydrateFontData(font: FontMetadata): Promise<FontMetadata> {
+/** Download font bytes from storage and cache locally when missing.
+ *  Returns null when the cloud object is gone so callers can skip/prune it. */
+export async function hydrateFontData(font: FontMetadata): Promise<FontMetadata | null> {
   const cached = await getCachedFont(font.id);
   if (cached?.data) {
     return cached;
   }
 
   if (!font.filePath) {
-    throw new Error(`Font data not available for "${font.family}"`);
+    console.warn(`[fonts] No file path for "${font.family}"`);
+    return null;
   }
 
   const buffer = await storage.downloadFont(font.filePath);
   if (!buffer) {
-    throw new Error(`Could not download font "${font.family}" from storage`);
+    return null;
   }
 
   const hydrated: FontMetadata = { ...font, data: buffer };
@@ -131,6 +133,16 @@ export async function installCloudFonts(fonts: FontMetadata[]): Promise<FontMeta
   for (const font of fonts) {
     try {
       const hydrated = await hydrateFontData(font);
+      if (!hydrated) {
+        // Orphan DB row: metadata exists but the storage object was deleted.
+        if (!font.id.startsWith('local-')) {
+          console.warn(
+            `[fonts] Removing orphaned font record "${font.family}" (file missing in storage)`
+          );
+          await storage.deleteFont_DB(font.id);
+        }
+        continue;
+      }
       await installFontToDocument(hydrated);
       installed.push(hydrated);
     } catch (err) {
@@ -206,5 +218,8 @@ export async function ensureFontReady(font: FontMetadata): Promise<void> {
   }
 
   const hydrated = await hydrateFontData(font);
+  if (!hydrated) {
+    throw new Error(`Font "${font.family}" is unavailable (missing from storage)`);
+  }
   await ensureFontInstalled(hydrated);
 }

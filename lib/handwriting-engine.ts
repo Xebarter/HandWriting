@@ -1,5 +1,6 @@
 'use client';
 
+import { DEFAULT_FONT_SIZE } from './document-constants';
 import { GlyphInfo, LetterPattern, DotPattern, ShapedGlyph, HandwritingEngineOptions } from './types';
 
 // Simple HarfBuzz wrapper for text shaping
@@ -132,7 +133,7 @@ export class HandwritingEngine {
    * Shape and extract glyphs from text
    */
   async processText(text: string, options: HandwritingEngineOptions = {}): Promise<GlyphInfo[]> {
-    const fontSize = options.fontSize || 48;
+    const fontSize = options.fontSize || DEFAULT_FONT_SIZE;
     const glyphs = await this.shaper.getGlyphPaths(text, fontSize);
     
     // Cache glyphs for reuse

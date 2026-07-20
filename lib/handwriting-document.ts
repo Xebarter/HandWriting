@@ -1,3 +1,4 @@
+import { DEFAULT_FONT_SIZE } from '@/lib/document-constants';
 import { DEFAULT_FONT_FAMILY } from '@/lib/font-preference';
 import {
   HandwritingMode,
@@ -62,7 +63,7 @@ export function createDefaultEditorState(): EditorDocumentState {
     title: DEFAULT_DOCUMENT_TITLE,
     text: '',
     mode: 'solid',
-    fontSize: 48,
+    fontSize: DEFAULT_FONT_SIZE,
     dotSpacing: 8,
     strokeWidth: 2,
     paperType: 'ruled',
@@ -112,7 +113,7 @@ export function deserializeDocument(raw: unknown): HandwritingDocument | null {
     title: typeof data.title === 'string' ? data.title : DEFAULT_DOCUMENT_TITLE,
     text: typeof data.text === 'string' ? data.text : '',
     mode: (data.mode as HandwritingMode) ?? 'solid',
-    fontSize: typeof data.fontSize === 'number' ? data.fontSize : 48,
+    fontSize: typeof data.fontSize === 'number' ? data.fontSize : DEFAULT_FONT_SIZE,
     dotSpacing: typeof data.dotSpacing === 'number' ? data.dotSpacing : 8,
     strokeWidth: typeof data.strokeWidth === 'number' ? data.strokeWidth : 2,
     paperType: (data.paperType as PaperType) ?? 'ruled',
