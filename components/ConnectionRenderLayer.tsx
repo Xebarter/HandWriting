@@ -38,6 +38,7 @@ export const ConnectionRenderLayer: React.FC<ConnectionRenderLayerProps> = ({
       })),
     [connections, dotSpacing]
   );
+  const dotRadius = Math.max(1.8, strokeWidth * 0.45);
 
   if (rendered.length === 0) {
     return null;
@@ -87,7 +88,7 @@ export const ConnectionRenderLayer: React.FC<ConnectionRenderLayerProps> = ({
 
             {((connection.mode ?? mode) === 'dotted' || (connection.mode ?? mode) === 'guide-lines') &&
               connection.dots.map((dot, index) => (
-                <circle key={`${connection.id}-dot-${index}`} cx={dot.x} cy={dot.y} r={1.8} fill={dotColor} />
+                <circle key={`${connection.id}-dot-${index}`} cx={dot.x} cy={dot.y} r={dotRadius} fill={dotColor} />
               ))}
           </g>
         ))}

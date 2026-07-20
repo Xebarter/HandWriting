@@ -6,15 +6,32 @@ import {
   WorksheetRecord,
   deserializeDocument,
 } from '@/lib/handwriting-document';
+import { isDesktopApp } from '@/lib/runtime';
+import {
+  deleteOfflineDocument,
+  listOfflineWorksheets,
+  loadOfflineDocument,
+  saveOfflineDocument,
+  updateOfflineDocument,
+} from '@/lib/offline-worksheets';
 
 export function useWorksheets() {
   const [worksheets, setWorksheets] = useState<WorksheetRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const offline = isDesktopApp();
 
   const fetchWorksheets = useCallback(async () => {
     try {
       setLoading(true);
+
+      if (offline) {
+        const data = await listOfflineWorksheets();
+        setWorksheets(data);
+        setError(null);
+        return;
+      }
+
       const response = await fetch('/api/worksheets', { method: 'GET' });
 
       if (!response.ok) {
@@ -30,7 +47,7 @@ export function useWorksheets() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [offline]);
 
   useEffect(() => {
     void fetchWorksheets();
@@ -38,6 +55,12 @@ export function useWorksheets() {
 
   const saveDocument = async (document: HandwritingDocument, fileName: string) => {
     try {
+      if (offline) {
+        const id = await saveOfflineDocument(document, fileName);
+        await fetchWorksheets();
+        return id;
+      }
+
       const response = await fetch('/api/worksheets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -63,6 +86,10 @@ export function useWorksheets() {
     worksheetId: string,
   ): Promise<{ record: WorksheetRecord; document: HandwritingDocument }> => {
     try {
+      if (offline) {
+        return loadOfflineDocument(worksheetId);
+      }
+
       const response = await fetch(`/api/worksheets/${worksheetId}`, { method: 'GET' });
       const payload = await response.json().catch(() => ({}));
 
@@ -99,6 +126,12 @@ export function useWorksheets() {
     title?: string,
   ) => {
     try {
+      if (offline) {
+        const record = await updateOfflineDocument(worksheetId, document, title);
+        await fetchWorksheets();
+        return record;
+      }
+
       const response = await fetch(`/api/worksheets/${worksheetId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -122,6 +155,12 @@ export function useWorksheets() {
 
   const deleteWorksheet = async (worksheetId: string) => {
     try {
+      if (offline) {
+        const deletedId = await deleteOfflineDocument(worksheetId);
+        await fetchWorksheets();
+        return deletedId;
+      }
+
       const response = await fetch(`/api/worksheets/${worksheetId}`, {
         method: 'DELETE',
       });

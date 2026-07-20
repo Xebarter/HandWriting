@@ -1,5 +1,5 @@
 import { HandwritingMode } from './types';
-import { formatCanvasFont, ruledCharDrawY, RuledFontMetrics } from './font-metrics';
+import { formatCanvasFont, letterInkStrokeWidth, ruledCharDrawY, RuledFontMetrics } from './font-metrics';
 import { drawLetterGuideLines, lineRowMetrics, ruledRowGuide } from './ruled-lines';
 import { layoutWorksheetText, PlacedChar, WorksheetTextLayout, WorksheetTextOptions } from './text-line-layout';
 
@@ -536,7 +536,7 @@ function drawCharDashes(
   if (!glyph) return;
 
   const { segments, dots, originX, originY, scale } = glyph;
-  const strokeWidth = Math.max(1.6, renderSize * 0.05);
+  const strokeWidth = letterInkStrokeWidth(renderSize);
   const drawBaselineY = ruledCharDrawY(
     ctx,
     placed.char,

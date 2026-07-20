@@ -8,7 +8,7 @@ import {
   RULER_INCH_PX,
   PAGE_INCHES_W,
 } from '@/lib/text-layout';
-import { estimateRuledFont, roundPx, RuledFontMetrics } from '@/lib/font-metrics';
+import { connectionStrokeWidthForRenderSize, estimateRuledFont, roundPx, RuledFontMetrics } from '@/lib/font-metrics';
 import { useRuledFontMetrics } from '@/lib/hooks/use-ruled-font-metrics';
 import { measureLetterLayout } from '@/lib/letter-layout';
 import { LetterBox } from '@/lib/types';
@@ -102,7 +102,6 @@ interface DocumentWorkspaceProps {
   onConnectionsChange: (connections: LetterConnection[]) => void;
   connectMode: boolean;
   connectionColor: string;
-  connectionWidth: number;
   onLetterLayoutChange?: (layout: LetterBox[], fontMetrics: RuledFontMetrics) => void;
   getCharMode?: (charIndex: number) => HandwritingMode;
   getCharFontSize?: (charIndex: number) => number;
@@ -138,7 +137,6 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   onConnectionsChange,
   connectMode,
   connectionColor,
-  connectionWidth,
   onLetterLayoutChange,
   getCharMode,
   getCharFontSize,
@@ -184,6 +182,10 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
   );
   const clientFontMetrics = useRuledFontMetrics(selectedFont, fontSize);
   const fontMetrics = isClient ? clientFontMetrics : ssrFontMetrics;
+  const connectionStrokeWidth = useMemo(
+    () => connectionStrokeWidthForRenderSize(fontMetrics.renderFontSize),
+    [fontMetrics.renderFontSize]
+  );
 
   useEffect(() => {
     setIsClient(true);
@@ -1346,7 +1348,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
                           dotSpacing={dotSpacing}
                           dotColor="#9aa0a6"
                           strokeColor={connectionColor}
-                          strokeWidth={connectionWidth}
+                          strokeWidth={connectionStrokeWidth}
                         />
                         {connectMode && (
                           <LetterConnectionLayer
@@ -1358,7 +1360,7 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
                             onConnectionsChange={onConnectionsChange}
                             active={connectMode}
                             connectionColor={connectionColor}
-                            connectionWidth={connectionWidth}
+                            connectionWidth={connectionStrokeWidth}
                             mode={mode}
                             dotSpacing={dotSpacing}
                             dotColor="#9aa0a6"

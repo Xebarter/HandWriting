@@ -5,7 +5,7 @@ import { HandwritingMode, LetterPattern, Stroke, ImageAsset, LayoutConfig, Lette
 import { DEFAULT_FONT_SIZE, PAGE_HEIGHT, PAGE_MARGIN } from '@/lib/document-constants';
 import { getLineHeight, getRuledRowHeight } from '@/lib/text-layout';
 import { drawRuledLinesFromLayout, drawRuledRowLines, ruledRowGuide } from '@/lib/ruled-lines';
-import { measureRuledFont, RuledFontMetrics } from '@/lib/font-metrics';
+import { connectionStrokeWidthForRenderSize, measureRuledFont, RuledFontMetrics } from '@/lib/font-metrics';
 import { drawPageMarginLines, pageContentArea } from '@/lib/page-margins';
 import { drawWorksheetText, drawWorksheetTextFromLayout } from '@/lib/canvas-text-renderer';
 import { measureWorksheetLayout, WorksheetTextLayout } from '@/lib/text-line-layout';
@@ -314,12 +314,15 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     }
 
     if (connections.length > 0) {
+      const connectionStrokeWidth = connectionStrokeWidthForRenderSize(
+        fontMetrics?.renderFontSize ?? fontSize
+      );
       renderConnections(ctx, connections, {
         mode,
         dotSpacing,
         dotColor,
         strokeColor: textColor,
-        strokeWidth,
+        strokeWidth: connectionStrokeWidth,
       });
     }
 

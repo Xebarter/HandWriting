@@ -3,13 +3,13 @@ import { RuledFontMetrics } from './font-metrics';
 import { pageContentArea, PageContentArea } from './page-margins';
 import { PlacedLine, WorksheetTextLayout } from './text-line-layout';
 
-/** Top + baseline — darkest/thickest tier for print */
+/** Top + baseline — darkest tier for print */
 export const RULED_LINE_STRONG_COLOR = '#0F2D5C';
-export const RULED_LINE_STRONG_WIDTH = 3.25;
-/** x-height line — matches the previous strong tier; stays lighter than cap/baseline */
-export const RULED_LINE_MID_COLOR = '#4070C0';
-export const RULED_LINE_MID_WIDTH = 1.75;
-export const RULED_LINE_MID_OPACITY = 1;
+export const RULED_LINE_STRONG_WIDTH = 1;
+/** x-height line — muted and low-contrast vs cap/baseline */
+export const RULED_LINE_MID_COLOR = '#9BB8E8';
+export const RULED_LINE_MID_WIDTH = 0.75;
+export const RULED_LINE_MID_OPACITY = 0.32;
 
 export interface RuledRowGuide {
   topY: number;

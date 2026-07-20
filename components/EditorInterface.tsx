@@ -38,7 +38,7 @@ import { createClient } from '@/lib/supabase/client';
 import { ensureSupabaseSession } from '@/lib/supabase/session';
 import { autoConnectLetters, rebaseConnections, reconcileConnections, removeConnectionsInRange, mergeConnections, connectionFullyInRange } from '@/lib/connection-engine';
 import { LetterBox } from '@/lib/types';
-import { RuledFontMetrics } from '@/lib/font-metrics';
+import { connectionStrokeWidthForRenderSize, estimateRuledFont, RuledFontMetrics } from '@/lib/font-metrics';
 import {
   applyTextStyleToRange,
   applyParagraphAlignToRange,
@@ -47,6 +47,7 @@ import {
   stripModeFromRanges,
 } from '@/lib/text-style-ranges';
 import { getParagraphBounds, getParagraphRangesForSelection } from '@/lib/paragraph-bounds';
+import { isDesktopApp } from '@/lib/runtime';
 import { HistoryEntry } from '@/lib/undo-history';
 
 function cloneConnections(connections: LetterConnection[]): LetterConnection[] {
@@ -66,7 +67,13 @@ function countWords(text: string): number {
   return trimmed.split(/\s+/).length;
 }
 
+async function ensureCloudSessionWhenOnline(): Promise<void> {
+  if (isDesktopApp()) return;
+  await ensureSupabaseSession();
+}
+
 export const EditorInterface: React.FC = () => {
+  const desktopApp = isDesktopApp();
   const AUTOSAVE_DELAY_MS = 1200;
   const router = useRouter();
   const [text, setText] = useState('');
@@ -90,6 +97,13 @@ export const EditorInterface: React.FC = () => {
   const [textStyleRanges, setTextStyleRanges] = useState<TextStyleRange[]>([]);
   const [connectMode, setConnectMode] = useState(false);
   const [autoLinkEnabled, setAutoLinkEnabled] = useState(false);
+  const cursiveLinkWidth = useMemo(
+    () =>
+      connectionStrokeWidthForRenderSize(
+        estimateRuledFont(selectedFont, defaultFontSize).renderFontSize
+      ),
+    [selectedFont, defaultFontSize]
+  );
   const [exportStatus, setExportStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [documentId, setDocumentId] = useState<string | null>(null);
   const [documentTitle, setDocumentTitle] = useState(DEFAULT_DOCUMENT_TITLE);
@@ -288,7 +302,7 @@ export const EditorInterface: React.FC = () => {
       void (async () => {
         setIsLoadingDocument(true);
         try {
-          await ensureSupabaseSession();
+          await ensureCloudSessionWhenOnline();
           const { record, document } = await loadDocument(docId);
           await applyEditorState(applyDocumentToEditor(document));
           setDocumentId(record.id);
@@ -369,12 +383,12 @@ export const EditorInterface: React.FC = () => {
       setConnections(
         autoConnectLetters(layout, {
           color: '#9aa0a6',
-          width: Math.max(1, strokeWidth),
+          width: cursiveLinkWidth,
           getCharStyle,
         })
       );
     },
-    [text, strokeWidth, autoLinkEnabled, getCharStyle]
+    [text, cursiveLinkWidth, autoLinkEnabled, getCharStyle]
   );
 
   const handleConnectionsChange = useCallback((next: LetterConnection[]) => {
@@ -400,14 +414,14 @@ export const EditorInterface: React.FC = () => {
       setConnections(
         autoConnectLetters(layoutRef.current, {
           color: '#9aa0a6',
-          width: Math.max(1, strokeWidth),
+          width: cursiveLinkWidth,
           getCharStyle: getAutoLinkedCharStyle,
         })
       );
     }
     setConnectMode(false);
     setIsDirty(true);
-  }, [mode, strokeWidth, textStyleRanges, textAlign]);
+  }, [mode, cursiveLinkWidth, textStyleRanges, textAlign, textColor, defaultFontSize]);
 
   const handleClearConnections = useCallback(() => {
     editorActionsRef.current?.recordHistory('other');
@@ -604,7 +618,7 @@ export const EditorInterface: React.FC = () => {
       setIsLoadingDocument(true);
       setPickerOpen(false);
       try {
-        await ensureSupabaseSession();
+        await ensureCloudSessionWhenOnline();
         const { record, document } = await loadDocument(id);
         await applyEditorState(applyDocumentToEditor(document));
         setDocumentId(record.id);
@@ -639,7 +653,7 @@ export const EditorInterface: React.FC = () => {
         setExportStatus(null);
       }
       try {
-        await ensureSupabaseSession();
+        await ensureCloudSessionWhenOnline();
         const document = serializeDocument(getEditorState());
         const fileName = documentFileName(document.title);
 
@@ -901,7 +915,7 @@ export const EditorInterface: React.FC = () => {
 
     const selectionConnections = autoConnectLetters(layout, {
       color: '#9aa0a6',
-      width: Math.max(1, strokeWidth),
+      width: cursiveLinkWidth,
       getCharStyle: getScopedCharStyle,
     }).filter((connection) =>
       connectionFullyInRange(connection, selectionStart, selectionEnd)
@@ -919,7 +933,7 @@ export const EditorInterface: React.FC = () => {
   }, [
     getEditorSelectionOffsets,
     mode,
-    strokeWidth,
+    cursiveLinkWidth,
     textStyleRanges,
     defaultFontSize,
     textAlign,
@@ -1227,7 +1241,9 @@ export const EditorInterface: React.FC = () => {
             </div>
             <div className="flex flex-col leading-none">
               <span className="text-[13px] font-semibold text-white">Handwriting</span>
-              <span className="text-[10px] text-white/70">Worksheet Generator</span>
+              <span className="text-[10px] text-white/70">
+                {desktopApp ? 'Desktop · Offline' : 'Worksheet Generator'}
+              </span>
             </div>
           </div>
 
@@ -1318,16 +1334,18 @@ export const EditorInterface: React.FC = () => {
             >
               <Printer size={15} />
             </button>
-            <button
-              type="button"
-              onClick={() => void handleSignOut()}
-              disabled={isSigningOut}
-              className="qat-btn disabled:opacity-50"
-              title="Sign out"
-              aria-label="Sign out"
-            >
-              {isSigningOut ? <Loader2 size={15} className="animate-spin" /> : <LogOut size={15} />}
-            </button>
+            {!desktopApp && (
+              <button
+                type="button"
+                onClick={() => void handleSignOut()}
+                disabled={isSigningOut}
+                className="qat-btn disabled:opacity-50"
+                title="Sign out"
+                aria-label="Sign out"
+              >
+                {isSigningOut ? <Loader2 size={15} className="animate-spin" /> : <LogOut size={15} />}
+              </button>
+            )}
           </div>
         </div>
 
@@ -1458,7 +1476,6 @@ export const EditorInterface: React.FC = () => {
         onConnectionsChange={handleConnectionsChange}
         connectMode={connectMode}
         connectionColor={textColor}
-        connectionWidth={Math.max(1, strokeWidth)}
         onLetterLayoutChange={handleLetterLayoutChange}
         getCharMode={getCharMode}
         getCharFontSize={getCharFontSize}

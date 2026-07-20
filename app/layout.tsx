@@ -1,6 +1,7 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { SupabaseSessionKeepAlive } from '@/components/SupabaseSessionKeepAlive'
+import { isDesktopApp } from '@/lib/runtime'
 import './globals.css'
 
 // Prevent Next.js from statically caching auth-bound responses across users.
@@ -36,12 +37,14 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const desktop = isDesktopApp()
+
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="antialiased" suppressHydrationWarning>
-        <SupabaseSessionKeepAlive />
+        {!desktop && <SupabaseSessionKeepAlive />}
         {children}
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        {!desktop && process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
   )

@@ -9,11 +9,16 @@ import {
   parseFontFromFile,
 } from '@/lib/font-manager';
 import { ensureSupabaseSession } from '@/lib/supabase/session';
+import { isDesktopApp } from '@/lib/runtime';
 import * as storage from '@/lib/supabase/storage';
 import { FontMetadata } from '@/lib/types';
 import type { User } from '@supabase/supabase-js';
 
 async function getSessionUser(): Promise<User | null> {
+  if (isDesktopApp()) {
+    return null;
+  }
+
   try {
     return await ensureSupabaseSession();
   } catch (err) {

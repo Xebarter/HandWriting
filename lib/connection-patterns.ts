@@ -176,11 +176,12 @@ function drawDottedTracePath(
   drawDirectionArrow(ctx, points[0], directionTarget, options.strokeColor);
 
   const dots = sampleTraceDots(points, options.dotSpacing);
+  const dotRadius = Math.max(1.8, options.strokeWidth * 0.45);
   ctx.save();
   ctx.fillStyle = options.dotColor;
   dots.forEach((dot) => {
     ctx.beginPath();
-    ctx.arc(dot.x, dot.y, 1.8, 0, Math.PI * 2);
+    ctx.arc(dot.x, dot.y, dotRadius, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.restore();

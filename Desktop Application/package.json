@@ -1,0 +1,43 @@
+{
+  "name": "handwriting-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Offline desktop shell for HandWriting",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "build:bundle": "npm run build:desktop --prefix ..",
+    "build": "npm run build:bundle && electron-builder --win --x64",
+    "pack": "npm run build:bundle && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^35.1.5",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.handwriting.desktop",
+    "productName": "HandWriting",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../.next/standalone",
+        "to": "app",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

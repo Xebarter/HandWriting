@@ -274,3 +274,13 @@ export function ruledCharDrawY(
   const descent = ctx.measureText(char).actualBoundingBoxDescent ?? 0;
   return descent > 0.25 ? baselineY - descent : baselineY;
 }
+
+/** Dash/centerline width used when drawing letter traces (dotted mode). */
+export function letterInkStrokeWidth(renderSize: number): number {
+  return Math.max(1.6, renderSize * 0.05);
+}
+
+/** Cursive link stroke width — scales gently with letter size, close to letter ink weight. */
+export function connectionStrokeWidthForRenderSize(renderSize: number): number {
+  return roundPx(Math.max(1.5, letterInkStrokeWidth(renderSize) * 1.05));
+}
