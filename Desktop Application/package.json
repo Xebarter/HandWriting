@@ -5,11 +5,16 @@
   "description": "Offline desktop shell for HandWriting",
   "main": "electron/main.cjs",
   "scripts": {
+    "postinstall": "node scripts/sync-brand-assets.cjs && node scripts/ensure-electron.cjs",
+    "predev": "node scripts/sync-brand-assets.cjs && node scripts/ensure-electron.cjs",
     "dev": "electron .",
+    "dev:web": "npm run desktop:dev --prefix ..",
+    "dev:packaged": "node scripts/run-packaged.cjs",
     "start": "electron .",
     "build:bundle": "npm run build:desktop --prefix ..",
-    "build": "npm run build:bundle && electron-builder --win --x64",
-    "pack": "npm run build:bundle && electron-builder --dir"
+    "build": "node scripts/package-desktop.cjs",
+    "pack": "node scripts/package-desktop.cjs --dir",
+    "package": "npm run build"
   },
   "devDependencies": {
     "electron": "^35.1.5",
@@ -19,12 +24,14 @@
     "appId": "com.handwriting.desktop",
     "productName": "HandWriting",
     "directories": {
-      "output": "dist"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "electron/**/*",
       "package.json"
     ],
+    "icon": "build/icon.ico",
     "extraResources": [
       {
         "from": "../.next/standalone",

@@ -407,9 +407,9 @@ export const EditorInterface: React.FC = () => {
           linksEnabled: true,
           lettersTouching: false,
           fontSize: defaultFontSize,
-          textAlign,
-          textColor,
-        });
+        textAlign,
+        textColor,
+      });
 
       setConnections(
         autoConnectLetters(layoutRef.current, {

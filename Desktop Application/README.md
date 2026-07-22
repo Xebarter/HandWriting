@@ -20,7 +20,27 @@ npm install
 From this folder:
 
 ```bash
+npm install
 npm run dev
+```
+
+If `npm run dev` fails, the Electron binary probably did not download. Common causes are a blocked/interrupted download or no internet during `npm install`.
+
+Repair it with:
+
+```bash
+node scripts/ensure-electron.cjs
+npm run dev
+```
+
+**Alternatives if Electron dev still fails:**
+
+```bash
+# Run the packaged build (after npm run package)
+npm run dev:packaged
+
+# Run in the browser without Electron (from project root)
+npm run desktop:dev
 ```
 
 This starts the Next.js dev server in desktop mode on `http://127.0.0.1:3310` and opens it in an Electron window.
@@ -32,6 +52,16 @@ npm run desktop:dev
 ```
 
 (from the project root)
+
+## Brand assets
+
+All logos and icons come from the project `public/` folder:
+
+- In-app logo: `public/favicon.svg`
+- Desktop/window/installer icon: `public/favicon.ico`
+- PWA manifest icons: `public/web-app-manifest-*.png`
+
+Before dev or packaging, assets are synced into `Desktop Application/build/` for Electron.
 
 ## Production build
 
@@ -49,9 +79,15 @@ npm run build:desktop
 npm run build
 ```
 
+or
+
+```bash
+npm run package
+```
+
 (from this folder)
 
-The installer is written to `Desktop Application/dist/`.
+The installer is written to `Desktop Application/release/`.
 
 ## Offline behavior
 

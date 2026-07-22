@@ -1,4 +1,5 @@
 import { cn } from '@/lib/utils';
+import { BRAND_ASSETS } from '@/lib/brand-assets';
 
 interface AppLogoProps {
   size?: number;
@@ -11,7 +12,7 @@ export function AppLogo({ size = 28, className, alt = 'HandWriting' }: AppLogoPr
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src="/favicon.svg"
+      src={BRAND_ASSETS.logo}
       alt={alt === false ? '' : alt}
       width={size}
       height={size}

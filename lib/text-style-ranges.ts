@@ -11,6 +11,18 @@ export interface ResolvedTextStyle {
   textColor: string;
 }
 
+type StylePatch = Partial<
+  Pick<
+    TextStyleRange,
+    | 'mode'
+    | 'linksEnabled'
+    | 'lettersTouching'
+    | 'fontSize'
+    | 'textAlign'
+    | 'textColor'
+  >
+>;
+
 export function getResolvedTextStyle(
   ranges: TextStyleRange[],
   charIndex: number,
@@ -63,16 +75,8 @@ export function normalizeTextStyleRanges(ranges: TextStyleRange[]): TextStyleRan
   return normalized;
 }
 
-function mergedStyleInRange(
-  ranges: TextStyleRange[],
-  start: number,
-  end: number
-): Partial<
-  Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'>
-> {
-  const merged: Partial<
-    Pick<TextStyleRange, 'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'>
-  > = {};
+function mergedStyleInRange(ranges: TextStyleRange[], start: number, end: number): StylePatch {
+  const merged: StylePatch = {};
 
   for (const range of ranges) {
     if (range.end <= start || range.start >= end) continue;
@@ -91,12 +95,7 @@ export function applyTextStyleToRange(
   ranges: TextStyleRange[],
   start: number,
   end: number,
-  patch: Partial<
-    Pick<
-      TextStyleRange,
-      'mode' | 'linksEnabled' | 'lettersTouching' | 'fontSize' | 'textAlign' | 'textColor'
-    >
-  >
+  patch: StylePatch
 ): TextStyleRange[] {
   if (end <= start) return ranges;
 

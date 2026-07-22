@@ -56,6 +56,7 @@ interface HandwritingCanvasProps {
   clipPageIndex?: number;
   /** Precomputed layout — skips re-layout during canvas paint for faster typing. */
   textLayout?: WorksheetTextLayout | null;
+  pageCount?: number;
 }
 
 export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvasProps>(
@@ -97,6 +98,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
       getCharLettersTouching,
       clipPageIndex,
       textLayout: providedTextLayout,
+      pageCount: providedPageCount,
     },
     ref
   ) => {
@@ -366,6 +368,7 @@ export const HandwritingCanvas = forwardRef<HTMLCanvasElement, HandwritingCanvas
     clipPageIndex,
     displayHeight,
     providedTextLayout,
+    providedPageCount,
   ]);
 
   const drawBackgroundPattern = (

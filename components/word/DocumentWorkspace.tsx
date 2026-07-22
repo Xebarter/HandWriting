@@ -1038,6 +1038,10 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
         fallbackCapAscent
       );
 
+      if (!targetLayoutLine) {
+        return lastPageLine.end;
+      }
+
       if (!targetLayoutLine.hasText) {
         return targetLayoutLine.start;
       }
@@ -1217,13 +1221,14 @@ export const DocumentWorkspace: React.FC<DocumentWorkspaceProps> = ({
     getCharAlign,
     getCharColor,
     getCharLettersTouching,
+    pageCount,
     bare: true as const,
   };
 
   const pageIndices = Array.from({ length: pageCount }, (_, index) => index);
 
   const editorOverlayClassName = cn(
-    'word-editor-overlay pointer-events-auto absolute inset-0 overflow-hidden whitespace-pre outline-none',
+    'word-editor-overlay pointer-events-auto absolute inset-0 z-[20] overflow-hidden whitespace-pre outline-none',
     isEmpty && 'word-editor-overlay--empty',
     connectMode && 'word-editor-overlay--connect-mode pointer-events-none'
   );

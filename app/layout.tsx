@@ -1,6 +1,7 @@
 import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { SupabaseSessionKeepAlive } from '@/components/SupabaseSessionKeepAlive'
+import { BRAND_ASSETS } from '@/lib/brand-assets'
 import { isDesktopApp } from '@/lib/runtime'
 import './globals.css'
 
@@ -10,25 +11,25 @@ export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
 export const metadata: Metadata = {
-  title: 'Handwriting Worksheet Generator',
+  title: BRAND_ASSETS.appTitle,
   description: 'Create customized handwriting practice worksheets for primary school students',
-  applicationName: 'HandWriting',
-  manifest: '/site.webmanifest',
+  applicationName: BRAND_ASSETS.appName,
+  manifest: BRAND_ASSETS.manifest,
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/favicon.svg', type: 'image/svg+xml' },
-      { url: '/favicon-96x96.png', sizes: '96x96', type: 'image/png' },
+      { url: BRAND_ASSETS.favicon, sizes: 'any' },
+      { url: BRAND_ASSETS.faviconSvg, type: 'image/svg+xml' },
+      { url: BRAND_ASSETS.faviconPng96, sizes: '96x96', type: 'image/png' },
     ],
-    apple: '/apple-touch-icon.png',
+    apple: BRAND_ASSETS.appleTouchIcon,
   },
 }
 
 export const viewport: Viewport = {
   colorScheme: 'light dark',
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: 'white' },
-    { media: '(prefers-color-scheme: dark)', color: 'black' },
+    { media: '(prefers-color-scheme: light)', color: BRAND_ASSETS.themeColor },
+    { media: '(prefers-color-scheme: dark)', color: '#0f172a' },
   ],
 }
 

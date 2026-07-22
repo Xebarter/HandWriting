@@ -234,7 +234,8 @@ function resolveLineBaseline(
 ): { baselineY: number; pageIndex: number } {
   const pageTop = (page: number) => page * PAGE_HEIGHT;
   const maxBaselineForPage = (page: number) => pageTop(page) + PAGE_HEIGHT - margin;
-  const firstBaselineForPage = (page: number) => pageTop(page) + margin + ruledHeight;
+  const firstBaselineForPage = (page: number) =>
+    pageTop(page) + margin + ruledHeight;
 
   let page = startPageIndex;
   let minY = pageTop(page) + margin + lineCapAscent;
